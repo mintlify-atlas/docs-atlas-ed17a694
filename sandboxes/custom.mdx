@@ -1,0 +1,292 @@
+---
+title: "Custom sandbox providers for Sandcastle agents"
+description: "Build your own Sandcastle sandbox provider using createBindMountSandboxProvider or createIsolatedSandboxProvider. Covers handle interfaces, factory signatures, and when to use each."
+---
+
+Sandcastle ships with built-in providers for Docker, Podman, and Vercel, but you can create your own provider for any environment that can run commands and manage files. Two factory functions cover the two provider types — one for environments that can mount host directories, and one for environments with their own independent filesystem.
+
+## Choosing a provider type
+
+Before implementing a custom provider, decide which type fits your target environment:
+
+<CardGroup cols={2}>
+  <Card title="Bind-mount provider" icon="link">
+    For environments that can mount host directories directly into the sandbox — typically local container runtimes. The agent writes to the host filesystem through the mount. No file syncing is needed.
+
+    Examples: Docker, Podman, custom local container runtimes.
+  </Card>
+  <Card title="Isolated provider" icon="shield">
+    For environments with their own independent filesystem — typically remote or cloud-based sandboxes. Sandcastle syncs the repository into the sandbox and extracts commits back to the host after the run.
+
+    Examples: Vercel microVMs, E2B, Daytona, remote VMs.
+  </Card>
+</CardGroup>
+
+## Import
+
+Both factory functions are exported from `SandboxProvider`:
+
+```typescript
+import {
+  createBindMountSandboxProvider,
+  createIsolatedSandboxProvider,
+} from "@ai-hero/sandcastle";
+```
+
+## `createBindMountSandboxProvider`
+
+Use this factory when your environment can bind-mount a host directory into the sandbox. The factory accepts a `BindMountSandboxProviderConfig` object:
+
+```typescript
+export interface BindMountSandboxProviderConfig {
+  /** Human-readable name for this provider (e.g. "docker", "podman"). */
+  readonly name: string;
+  /** Environment variables injected by this provider. Merged at launch time. */
+  readonly env?: Record<string, string>;
+  /**
+   * Absolute path to the home directory inside the sandbox (e.g. "/home/agent").
+   * Used to expand "~" in user-provided sandboxPath mount configs.
+   */
+  readonly sandboxHomedir?: string;
+  /** Create a sandbox handle from the given options. */
+  readonly create: (
+    options: BindMountCreateOptions,
+  ) => Promise<BindMountSandboxHandle>;
+}
+```
+
+Your `create` function receives `BindMountCreateOptions`:
+
+```typescript
+export interface BindMountCreateOptions {
+  /** Host-side path to the worktree directory. */
+  readonly worktreePath: string;
+  /** Host-side path to the original repo root. */
+  readonly hostRepoPath: string;
+  /** Volume mounts to apply (host:sandbox pairs). */
+  readonly mounts: Array<{
+    hostPath: string;
+    sandboxPath: string;
+    readonly?: boolean;
+  }>;
+  /** Environment variables to inject into the sandbox. */
+  readonly env: Record<string, string>;
+}
+```
+
+It must return a `BindMountSandboxHandle`:
+
+```typescript
+export interface BindMountSandboxHandle {
+  /** Absolute path to the worktree inside the sandbox. */
+  readonly worktreePath: string;
+  exec(
+    command: string,
+    options?: {
+      onLine?: (line: string) => void;
+      cwd?: string;
+      sudo?: boolean;
+      stdin?: string;
+    },
+  ): Promise<ExecResult>;
+  interactiveExec?(
+    args: string[],
+    options: InteractiveExecOptions,
+  ): Promise<{ exitCode: number }>;
+  copyFileIn(hostPath: string, sandboxPath: string): Promise<void>;
+  copyFileOut(sandboxPath: string, hostPath: string): Promise<void>;
+  close(): Promise<void>;
+}
+```
+
+<Warning>
+  `exec` must support line-by-line streaming via `onLine`. This is how Sandcastle delivers live feedback and enforces idle timeouts. A buffered implementation that only calls `onLine` after the process exits does not satisfy the contract.
+</Warning>
+
+### Skeleton: custom bind-mount provider
+
+```typescript
+import {
+  createBindMountSandboxProvider,
+  type BindMountCreateOptions,
+  type BindMountSandboxHandle,
+  type ExecResult,
+} from "@ai-hero/sandcastle";
+
+export const myProvider = (options?: { imageName?: string }) =>
+  createBindMountSandboxProvider({
+    name: "my-provider",
+    sandboxHomedir: "/home/agent",
+
+    create: async (
+      createOptions: BindMountCreateOptions,
+    ): Promise<BindMountSandboxHandle> => {
+      // 1. Start your container/VM, passing createOptions.mounts as bind-mounts
+      //    and createOptions.env as environment variables.
+      const containerId = await startMyContainer({
+        mounts: createOptions.mounts,
+        env: createOptions.env,
+        workdir: createOptions.worktreePath,
+      });
+
+      const handle: BindMountSandboxHandle = {
+        // Report the sandbox-side path to the worktree
+        worktreePath: createOptions.worktreePath,
+
+        exec: async (command, opts): Promise<ExecResult> => {
+          // Run the command inside the container, streaming lines via opts.onLine
+          return runInContainer(containerId, command, opts);
+        },
+
+        copyFileIn: async (hostPath, sandboxPath) => {
+          await copyToContainer(containerId, hostPath, sandboxPath);
+        },
+
+        copyFileOut: async (sandboxPath, hostPath) => {
+          await copyFromContainer(containerId, sandboxPath, hostPath);
+        },
+
+        close: async () => {
+          await stopAndRemoveContainer(containerId);
+        },
+      };
+
+      return handle;
+    },
+  });
+```
+
+## `createIsolatedSandboxProvider`
+
+Use this factory when your environment has its own filesystem and cannot mount host directories. The factory accepts an `IsolatedSandboxProviderConfig` object:
+
+```typescript
+export interface IsolatedSandboxProviderConfig {
+  /** Human-readable name for this provider (e.g. "daytona", "e2b"). */
+  readonly name: string;
+  /** Environment variables injected by this provider. Merged at launch time. */
+  readonly env?: Record<string, string>;
+  /** Create an isolated sandbox handle from the given options. */
+  readonly create: (
+    options: IsolatedCreateOptions,
+  ) => Promise<IsolatedSandboxHandle>;
+}
+```
+
+Your `create` function receives `IsolatedCreateOptions`:
+
+```typescript
+export interface IsolatedCreateOptions {
+  /** Environment variables to inject into the sandbox. */
+  readonly env: Record<string, string>;
+}
+```
+
+It must return an `IsolatedSandboxHandle`:
+
+```typescript
+export interface IsolatedSandboxHandle {
+  /** Absolute path to the worktree inside the sandbox. */
+  readonly worktreePath: string;
+  exec(
+    command: string,
+    options?: {
+      onLine?: (line: string) => void;
+      cwd?: string;
+      sudo?: boolean;
+      stdin?: string;
+    },
+  ): Promise<ExecResult>;
+  interactiveExec?(
+    args: string[],
+    options: InteractiveExecOptions,
+  ): Promise<{ exitCode: number }>;
+  /** Copy a file or directory from the host into the sandbox. */
+  copyIn(hostPath: string, sandboxPath: string): Promise<void>;
+  /** Copy a single file from the sandbox to the host. */
+  copyFileOut(sandboxPath: string, hostPath: string): Promise<void>;
+  close(): Promise<void>;
+}
+```
+
+Note that isolated handles expose `copyIn` (which accepts directories) instead of `copyFileIn` (files only). This is how Sandcastle transfers the full repository into the sandbox before the agent runs.
+
+### Skeleton: custom isolated provider
+
+```typescript
+import {
+  createIsolatedSandboxProvider,
+  type IsolatedCreateOptions,
+  type IsolatedSandboxHandle,
+  type ExecResult,
+} from "@ai-hero/sandcastle";
+
+const SANDBOX_REPO_PATH = "/sandbox/workspace";
+
+export const myIsolatedProvider = (options?: { token?: string }) =>
+  createIsolatedSandboxProvider({
+    name: "my-isolated-provider",
+
+    create: async (
+      createOptions: IsolatedCreateOptions,
+    ): Promise<IsolatedSandboxHandle> => {
+      // 1. Create the remote sandbox, injecting createOptions.env
+      const sandbox = await MySDK.create({
+        env: createOptions.env,
+        token: options?.token,
+      });
+
+      // 2. Ensure the workspace directory exists
+      await sandbox.mkDir(SANDBOX_REPO_PATH);
+
+      const handle: IsolatedSandboxHandle = {
+        worktreePath: SANDBOX_REPO_PATH,
+
+        exec: async (command, opts): Promise<ExecResult> => {
+          // Run the command in the remote sandbox, streaming via opts.onLine
+          return runInSandbox(sandbox, command, opts);
+        },
+
+        copyIn: async (hostPath, sandboxPath) => {
+          // Copy a file or directory from the host into the sandbox
+          await copyToSandbox(sandbox, hostPath, sandboxPath);
+        },
+
+        copyFileOut: async (sandboxPath, hostPath) => {
+          // Copy a single file from the sandbox back to the host
+          await copyFromSandbox(sandbox, sandboxPath, hostPath);
+        },
+
+        close: async () => {
+          await sandbox.stop();
+        },
+      };
+
+      return handle;
+    },
+  });
+```
+
+## Branch strategy defaults
+
+The provider type determines the default branch strategy used when you do not pass `branchStrategy` to `run()`:
+
+| Provider type | Default branch strategy |
+|---|---|
+| Bind-mount | `{ type: "head" }` |
+| Isolated | `{ type: "merge-to-head" }` |
+
+Isolated providers cannot use the `head` strategy — that strategy requires writing directly to the host working directory, which is not possible from a remote filesystem.
+
+## Reference implementations
+
+The built-in providers are the best reference for production-quality implementations:
+
+<CardGroup cols={2}>
+  <Card title="Docker provider" icon="docker" href="/sandboxes/docker">
+    Bind-mount provider using `docker run` and `docker exec`. Shows UID/GID handling, SELinux labels, and signal-handler-based cleanup.
+  </Card>
+  <Card title="Vercel provider" icon="cloud" href="/sandboxes/vercel">
+    Isolated provider using `@vercel/sandbox`. Shows directory copy-in via tar, file copy-out via buffer read, and dynamic peer dependency import.
+  </Card>
+</CardGroup>

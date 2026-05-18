@@ -1,0 +1,147 @@
+---
+title: "createSandbox() — reusable sandbox for multiple agent runs"
+description: "Create a persistent sandbox once and run multiple agents inside it. Avoids container startup costs and keeps all runs on the same branch with shared state."
+---
+
+`createSandbox()` creates a git worktree and starts a sandbox container once, then returns a `Sandbox` handle you can call `.run()` on as many times as you need. All runs share the same container, so installed dependencies, build artifacts, and file-system state persist between calls. Use it when you need an implement-then-review pipeline, or when the container startup cost of calling `run()` repeatedly would be significant.
+
+Use [`run()`](/api/run) instead when you only need a single one-shot invocation — it handles the sandbox lifecycle automatically.
+
+## Import
+
+```typescript
+import { createSandbox, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+```
+
+## Signature
+
+```typescript
+function createSandbox(options: CreateSandboxOptions): Promise<Sandbox>
+```
+
+## Basic usage
+
+```typescript
+await using sandbox = await createSandbox({
+  branch: "agent/fix-42",
+  sandbox: docker(),
+});
+
+const result = await sandbox.run({
+  agent: claudeCode("claude-opus-4-7"),
+  prompt: "Fix issue #42 in this repo.",
+});
+
+console.log(result.commits); // [{ sha: "abc123" }]
+```
+
+## Automatic cleanup with `await using`
+
+`createSandbox()` returns an object that implements `Symbol.asyncDispose`. When you declare the variable with `await using`, the sandbox is automatically torn down when the block exits — even on error. If the worktree has uncommitted changes at close time, it is preserved on disk rather than deleted.
+
+## Multi-run implement-then-review example
+
+```typescript
+import { createSandbox, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await using sandbox = await createSandbox({
+  branch: "agent/fix-42",
+  sandbox: docker(),
+  hooks: {
+    sandbox: { onSandboxReady: [{ command: "npm install" }] },
+  },
+});
+
+// Step 1: implement
+const implResult = await sandbox.run({
+  agent: claudeCode("claude-opus-4-7"),
+  promptFile: ".sandcastle/implement.md",
+  maxIterations: 5,
+});
+
+// Step 2: review on the same branch, same container
+const reviewResult = await sandbox.run({
+  agent: claudeCode("claude-sonnet-4-6"),
+  prompt: "Review the changes and fix any issues.",
+});
+```
+
+Commits from all `.run()` calls accumulate on the same branch. The sandbox container stays alive between runs.
+
+## Manual close with `CloseResult`
+
+```typescript
+const sandbox = await createSandbox({
+  branch: "agent/fix-42",
+  sandbox: docker(),
+});
+
+// ... run agents ...
+
+const closeResult = await sandbox.close();
+if (closeResult.preservedWorktreePath) {
+  console.log(`Worktree preserved at ${closeResult.preservedWorktreePath}`);
+}
+```
+
+## `CreateSandboxOptions`
+
+<ParamField path="branch" type="string" required>
+  The explicit branch name for the sandbox worktree. The worktree is created on this branch (or the branch is created from HEAD if it does not exist).
+</ParamField>
+
+<ParamField path="sandbox" type="SandboxProvider" required>
+  Sandbox provider — for example `docker()`, `podman()`, or a custom provider. See [sandbox types](/api/sandbox-types).
+</ParamField>
+
+<ParamField path="cwd" type="string" default="process.cwd()">
+  Host repo directory used as the anchor for `.sandcastle/` artifacts and git operations. Relative paths resolve against `process.cwd()`.
+</ParamField>
+
+<ParamField path="hooks" type="SandboxHooks">
+  Lifecycle hooks grouped by execution location. Hooks run once at creation time. See [SandboxHooks](/api/sandbox-types#sandboxhooks).
+</ParamField>
+
+<ParamField path="copyToWorktree" type="string[]">
+  Host-relative file paths to copy into the worktree at creation time (for example `[".env"]`). Not supported with isolated providers — those handle file transfer internally.
+</ParamField>
+
+<ParamField path="timeouts" type="Timeouts">
+  Override default timeouts for built-in lifecycle steps. See [Timeouts](/api/sandbox-types#timeouts).
+</ParamField>
+
+## `Sandbox` object
+
+The `Sandbox` handle returned by `createSandbox()` exposes the following properties and methods.
+
+<ResponseField name="branch" type="string">
+  The branch the sandbox worktree is on.
+</ResponseField>
+
+<ResponseField name="worktreePath" type="string">
+  Absolute host path to the worktree directory.
+</ResponseField>
+
+<ResponseField name="run(options)" type="(SandboxRunOptions) => Promise<SandboxRunResult>">
+  Invoke an agent inside the existing sandbox. The container stays running between calls.
+</ResponseField>
+
+<ResponseField name="interactive(options)" type="(SandboxInteractiveOptions) => Promise<SandboxInteractiveResult>">
+  Launch an interactive agent session inside the sandbox. The agent TUI is attached to your terminal.
+</ResponseField>
+
+<ResponseField name="close()" type="() => Promise<CloseResult>">
+  Tear down the container. If the worktree has uncommitted changes it is preserved; otherwise it is removed.
+</ResponseField>
+
+<ResponseField name="[Symbol.asyncDispose]()" type="() => Promise<void>">
+  Called automatically by `await using`. Delegates to `close()`.
+</ResponseField>
+
+## `CloseResult`
+
+<ResponseField name="preservedWorktreePath" type="string | undefined">
+  Host path to the preserved worktree directory. Set when the worktree had uncommitted changes at close time. `undefined` when the worktree was clean and has been removed.
+</ResponseField>

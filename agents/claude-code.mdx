@@ -1,0 +1,132 @@
+---
+title: "Claude Code agent provider configuration and options"
+description: "Configure the claudeCode provider with model strings, reasoning effort levels, env vars, session capture, and session resume for Sandcastle runs."
+---
+
+The `claudeCode` provider is the default agent provider for Sandcastle. It invokes Claude Code inside the sandbox using `--print --output-format stream-json`, streams the JSON output line by line, and automatically captures each session to your host after every iteration.
+
+## Import
+
+```typescript
+import { claudeCode } from "@ai-hero/sandcastle";
+```
+
+## Signature
+
+```typescript
+claudeCode(model: string, options?: ClaudeCodeOptions): AgentProvider
+```
+
+## Model strings
+
+Pass any Claude model identifier as the first argument:
+
+```typescript
+claudeCode("claude-opus-4-7")
+claudeCode("claude-sonnet-4-6")
+```
+
+## Options
+
+```typescript
+agent: claudeCode("claude-opus-4-7", {
+  effort: "high",
+  env: { CUSTOM_VAR: "value" },
+})
+```
+
+<ParamField path="effort" type='"low" | "medium" | "high" | "max"'>
+  Reasoning effort level passed to Claude Code via `--effort`. Higher effort levels give the agent more time to think before acting. The `"max"` level is only available on Opus models.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>" default="{}">
+  Environment variables injected by this agent provider. Merged at launch time with env from the sandbox provider and any run-level `env` option.
+</ParamField>
+
+<ParamField path="captureSessions" type="boolean" default="true">
+  When `false`, session capture is disabled and no JSONL files are written to the host. See [session capture](#session-capture) below.
+</ParamField>
+
+## Required environment variable
+
+Claude Code requires `ANTHROPIC_API_KEY` to be set. Add it to `.sandcastle/.env` before running any agent:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+<Note>
+  `.sandcastle/.env` is listed in `.sandcastle/.gitignore` by default. Do not commit it.
+</Note>
+
+## Session capture
+
+After each iteration, Sandcastle automatically copies the Claude Code session JSONL from the sandbox to your host at:
+
+```
+~/.claude/projects/<encoded-path>/sessions/<session-id>.jsonl
+```
+
+The `cwd` fields inside each JSONL entry are rewritten to match your host repo root, so `claude --resume` works natively without path adjustments.
+
+Session capture is enabled by default. To opt out, pass `captureSessions: false`:
+
+```typescript
+agent: claudeCode("claude-opus-4-7", { captureSessions: false })
+```
+
+<Warning>
+  If session capture is enabled and the copy fails, the run fails. Disable capture if you do not need session resume and want to avoid this failure mode.
+</Warning>
+
+Each `IterationResult` exposes the captured file path and parsed token usage:
+
+```typescript
+const result = await run({ agent: claudeCode("claude-opus-4-7"), ... });
+
+for (const iteration of result.iterations) {
+  console.log(iteration.sessionId);       // e.g. "abc-123-def"
+  console.log(iteration.sessionFilePath); // absolute host path to the JSONL
+  console.log(iteration.usage?.inputTokens);
+}
+```
+
+## Session resume
+
+Pass `resumeSession` to `run()` to continue a prior Claude Code conversation inside a new sandbox. Sandcastle validates the session file exists on the host, rewrites its `cwd` fields to match the sandbox-side path, and passes `--resume <id>` to Claude Code on the first iteration.
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: "Continue where you left off.",
+  resumeSession: "abc-123-def",
+});
+```
+
+### Constraints
+
+- `resumeSession` is incompatible with `maxIterations > 1`. Sandcastle throws before sandbox creation if both are set.
+- The session file must exist at `~/.claude/projects/<encoded-path>/sessions/<id>.jsonl`. If it does not exist, Sandcastle throws before sandbox creation.
+- Only the first iteration receives the `--resume` flag. Any subsequent iterations start fresh.
+- Non-Claude agent providers ignore `resumeSession`.
+
+## Complete example
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+const result = await run({
+  agent: claudeCode("claude-opus-4-7", {
+    effort: "high",
+    env: { EXTRA_VAR: "value" },
+  }),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  maxIterations: 3,
+});
+
+console.log(result.iterations[0]?.sessionId);
+console.log(result.iterations[0]?.usage?.outputTokens);
+```

@@ -1,0 +1,133 @@
+---
+title: "interactive() — supervised interactive agent sessions"
+description: "Launch an agent TUI in your terminal for supervised sessions. Accepts noSandbox() to run on the host directly without --dangerously-skip-permissions."
+---
+
+`interactive()` launches an agent's interactive terminal UI (TUI) with your terminal attached. Unlike `run()`, which runs the agent unattended, `interactive()` puts you in the session — you can watch what the agent does and approve any permission prompts in real time. When the session ends, Sandcastle collects commits and handles branch merging just as it does for `run()`.
+
+`interactive()` is the only top-level function that accepts `noSandbox()` as the `sandbox` option. With `noSandbox()`, the agent runs directly on your host machine without a container and without `--dangerously-skip-permissions` — permissions are gated by the interactive TUI instead.
+
+## Import
+
+```typescript
+import { interactive, claudeCode } from "@ai-hero/sandcastle";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+```
+
+## Signature
+
+```typescript
+function interactive(options: InteractiveOptions): Promise<InteractiveResult>
+```
+
+## Usage with `noSandbox()`
+
+```typescript
+import { interactive, claudeCode } from "@ai-hero/sandcastle";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+
+const result = await interactive({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: noSandbox(),
+  // prompt is optional — omit to open the TUI with no initial message
+  prompt: "Explore the codebase and understand the authentication flow.",
+  cwd: "/path/to/other-repo",
+});
+
+console.log(result.commits);   // commits made during the session
+console.log(result.branch);    // branch the agent worked on
+console.log(result.exitCode);  // exit code of the interactive process
+```
+
+## Usage with a container sandbox
+
+```typescript
+import { interactive, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+const result = await interactive({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  branchStrategy: { type: "branch", branch: "agent/explore-42" },
+  prompt: "Explore the codebase and understand the authentication flow.",
+});
+```
+
+## Options
+
+<ParamField path="agent" type="AgentProvider" required>
+  The agent provider — for example `claudeCode("claude-opus-4-7")`. The provider must implement `buildInteractiveArgs`.
+</ParamField>
+
+<ParamField path="sandbox" type="AnySandboxProvider" default="noSandbox()">
+  Sandbox provider. Accepts `docker()`, `podman()`, `vercel()`, or `noSandbox()`. Defaults to `noSandbox()` when omitted. With `noSandbox()`, the agent runs directly on the host without `--dangerously-skip-permissions`.
+</ParamField>
+
+<ParamField path="prompt" type="string">
+  Inline prompt passed to the agent at session start. Optional — omit to open the TUI with no initial message. Mutually exclusive with `promptFile`.
+</ParamField>
+
+<ParamField path="promptFile" type="string">
+  Path to a prompt file. Mutually exclusive with `prompt`. Resolves against `process.cwd()`.
+</ParamField>
+
+<ParamField path="name" type="string">
+  Optional display name for the session, shown in the summary output.
+</ParamField>
+
+<ParamField path="branchStrategy" type="BranchStrategy">
+  Branch strategy. Defaults to `{ type: "head" }` for bind-mount and no-sandbox providers, and `{ type: "merge-to-head" }` for isolated providers. See [BranchStrategy](/api/sandbox-types#branchstrategy).
+</ParamField>
+
+<ParamField path="hooks" type="SandboxHooks">
+  Lifecycle hooks. See [SandboxHooks](/api/sandbox-types#sandboxhooks).
+</ParamField>
+
+<ParamField path="copyToWorktree" type="string[]">
+  Host-relative file paths to copy into the worktree before the session starts. Not supported with `branchStrategy: { type: "head" }`.
+</ParamField>
+
+<ParamField path="promptArgs" type="PromptArgs">
+  Key-value map for `{{KEY}}` placeholder substitution. Only applies when using `promptFile`. Passing `promptArgs` with an inline `prompt` is an error.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>">
+  Additional environment variables to inject into the sandbox. Merged on top of `.sandcastle/.env` and provider env.
+</ParamField>
+
+<ParamField path="cwd" type="string" default="process.cwd()">
+  Host repo directory. Relative paths resolve against `process.cwd()`; absolute paths pass through as-is.
+</ParamField>
+
+<ParamField path="signal" type="AbortSignal">
+  An `AbortSignal` that cancels the session when aborted. If already aborted at entry, `interactive()` rejects immediately. The rejected promise surfaces `signal.reason` directly — no Sandcastle-specific wrapping.
+</ParamField>
+
+<ParamField path="timeouts" type="Timeouts">
+  Override default timeouts for built-in lifecycle steps. See [Timeouts](/api/sandbox-types#timeouts).
+</ParamField>
+
+## Return value
+
+<ResponseField name="commits" type="{ sha: string }[]">
+  List of commits made during the interactive session.
+</ResponseField>
+
+<ResponseField name="branch" type="string">
+  The branch name the agent worked on.
+</ResponseField>
+
+<ResponseField name="preservedWorktreePath" type="string | undefined">
+  Host path to the preserved worktree, set when the worktree had uncommitted changes at session end. `undefined` when the worktree was clean.
+</ResponseField>
+
+<ResponseField name="exitCode" type="number">
+  Exit code of the interactive agent process.
+</ResponseField>
+
+## Notes
+
+- `prompt` is optional for `interactive()`. Omitting it opens the TUI with no initial message, letting you type the first prompt yourself.
+- With `noSandbox()`, the agent runs on the host and the standard permission UI is active — no `--dangerously-skip-permissions` flag is passed.
+- All three branch strategies (`head`, `merge-to-head`, `branch`) are supported, unlike `createWorktree()` which excludes `head`.

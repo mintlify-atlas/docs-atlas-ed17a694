@@ -1,0 +1,90 @@
+---
+title: "sandcastle docker: build and remove Docker images"
+description: "Use sandcastle docker build-image to rebuild your Docker sandbox image after modifying the Dockerfile, and sandcastle docker remove-image to clean it up."
+---
+
+The `sandcastle docker` subcommands manage the Docker image that Sandcastle uses to create agent sandboxes. You run `sandcastle docker build-image` once after `sandcastle init`, and again whenever you modify the `Dockerfile`. When you no longer need the image, `sandcastle docker remove-image` removes it.
+
+## `sandcastle docker build-image`
+
+Rebuilds the Docker image from `.sandcastle/Dockerfile`. Run this command after `sandcastle init` or any time you change the `Dockerfile` — for example, to add a language runtime, install extra tools, or update the base image.
+
+```bash
+npx sandcastle docker build-image
+```
+
+On Linux and macOS, the build automatically passes `--build-arg AGENT_UID=$(id -u)` and `--build-arg AGENT_GID=$(id -g)` to the Docker build. This bakes your host UID and GID into the image's `agent` user, so files the agent creates inside the container are owned by you on the host. Without this, you may encounter permission errors when the agent writes files through the bind mount.
+
+### When to rebuild
+
+Rebuild the image after:
+
+- Modifying `.sandcastle/Dockerfile`
+- Changing the base image or installed packages
+- Updating agent tools (e.g., upgrading the `claude` CLI version)
+
+### Options
+
+<ParamField path="--image-name" type="string">
+  Docker image name. Defaults to `sandcastle:<repo-dir-name>`, derived from the basename of your repo directory. Pass this flag if you used a custom name during `sandcastle init`.
+</ParamField>
+
+<ParamField path="--dockerfile" type="string">
+  Path to a custom Dockerfile. When provided, the build context is set to the current working directory rather than `.sandcastle/`. Use this if your Dockerfile lives outside the config directory or references files from the repo root.
+</ParamField>
+
+### Example
+
+```bash
+# Rebuild using the default image name and .sandcastle/Dockerfile
+npx sandcastle docker build-image
+
+# Rebuild with a custom image name
+npx sandcastle docker build-image --image-name my-org/sandcastle:latest
+
+# Build from a Dockerfile outside .sandcastle/
+npx sandcastle docker build-image --dockerfile ./docker/Agent.Dockerfile
+```
+
+## `sandcastle docker remove-image`
+
+Removes the Docker image from your local Docker daemon. This is useful for freeing disk space after you finish a project, or before rebuilding from a completely different base image.
+
+```bash
+npx sandcastle docker remove-image
+```
+
+### Options
+
+<ParamField path="--image-name" type="string">
+  Docker image name to remove. Defaults to `sandcastle:<repo-dir-name>`. Pass this flag if you used a custom name.
+</ParamField>
+
+### Example
+
+```bash
+# Remove the default image
+npx sandcastle docker remove-image
+
+# Remove a named image
+npx sandcastle docker remove-image --image-name my-org/sandcastle:latest
+```
+
+## Default image name
+
+Both commands default to `sandcastle:<repo-dir-name>`, where `<repo-dir-name>` is the basename of your repo's root directory. For example, if your repo lives at `/Users/alice/projects/my-app`, the default image name is `sandcastle:my-app`.
+
+Pass `--image-name` to both `sandcastle docker build-image` and your `docker()` provider call if you use a custom name:
+
+```typescript
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await run({
+  sandbox: docker({ imageName: "my-org/sandcastle:latest" }),
+  // ...
+});
+```
+
+<Note>
+  If the image is not found locally when a sandbox starts, Sandcastle fails immediately with a message telling you to run `sandcastle docker build-image`. You do not need to handle this in code — fix it by building the image first.
+</Note>

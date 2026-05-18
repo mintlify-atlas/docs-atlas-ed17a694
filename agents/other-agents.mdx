@@ -1,0 +1,135 @@
+---
+title: "Codex, OpenCode, and Pi agent provider reference"
+description: "Configure the codex, opencode, and pi agent providers in Sandcastle. Includes model strings, options, and usage examples for each provider."
+---
+
+Sandcastle includes three agent providers beyond Claude Code: `codex` for OpenAI Codex, `opencode` for OpenCode, and `pi` for Pi. All three follow the same pattern — call the factory with a model string, pass the result as the `agent` option to `run()`, and Sandcastle handles the rest.
+
+<Note>
+  Session capture and `resumeSession` are Claude Code-specific features. The `codex`, `opencode`, and `pi` providers do not capture sessions and ignore `resumeSession`.
+</Note>
+
+## Codex
+
+The `codex` provider invokes `codex exec` inside the sandbox with JSON output mode. It streams command executions and agent messages from stdout.
+
+### Import and signature
+
+```typescript
+import { codex } from "@ai-hero/sandcastle";
+
+codex(model: string, options?: CodexOptions): AgentProvider
+```
+
+### Options
+
+<ParamField path="effort" type='"low" | "medium" | "high" | "xhigh"'>
+  Reasoning effort level passed to Codex via `-c model_reasoning_effort=<value>`.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>" default="{}">
+  Environment variables injected by this agent provider at launch time.
+</ParamField>
+
+### Usage
+
+```typescript
+import { run, codex } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await run({
+  agent: codex("gpt-5.4-mini"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+With effort level:
+
+```typescript
+await run({
+  agent: codex("gpt-5.4-mini", { effort: "high" }),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+---
+
+## OpenCode
+
+The `opencode` provider invokes `opencode run` inside the sandbox. OpenCode does not emit structured JSON, so its output is passed through as raw stdout — Sandcastle does not parse it into stream events.
+
+### Import and signature
+
+```typescript
+import { opencode } from "@ai-hero/sandcastle";
+
+opencode(model: string, options?: OpenCodeOptions): AgentProvider
+```
+
+### Options
+
+<ParamField path="variant" type="string">
+  Provider-specific reasoning variant passed via `--variant`. The accepted values depend on the model and provider (e.g. `"high"`, `"max"`, `"low"`, `"minimal"`).
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>" default="{}">
+  Environment variables injected by this agent provider at launch time.
+</ParamField>
+
+### Usage
+
+```typescript
+import { run, opencode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await run({
+  agent: opencode("opencode/big-pickle"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+With a variant:
+
+```typescript
+await run({
+  agent: opencode("opencode/big-pickle", { variant: "high" }),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+---
+
+## Pi
+
+The `pi` provider invokes the `pi` CLI inside the sandbox in JSON mode. It parses `message_update` and `agent_end` events from stdout to extract text and result content.
+
+### Import and signature
+
+```typescript
+import { pi } from "@ai-hero/sandcastle";
+
+pi(model: string, options?: PiOptions): AgentProvider
+```
+
+### Options
+
+<ParamField path="env" type="Record<string, string>" default="{}">
+  Environment variables injected by this agent provider at launch time.
+</ParamField>
+
+### Usage
+
+```typescript
+import { run, pi } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await run({
+  agent: pi("your-model-string"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```

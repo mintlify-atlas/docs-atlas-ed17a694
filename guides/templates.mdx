@@ -1,0 +1,95 @@
+---
+title: "Init templates: scaffolding your agent workflow"
+description: "Choose from five Sandcastle init templates to scaffold a prompt and orchestration script tailored to your agent workflow, from simple loops to parallel planners."
+---
+
+When you run `sandcastle init`, Sandcastle asks you to choose a template. Each template scaffolds a `prompt.md` and a `main.ts` (or `main.mts`) file suited to a specific workflow. You can use the templates as a starting point and customize them, or use the `blank` template to start from scratch.
+
+## Selecting a template
+
+Run `sandcastle init` and follow the prompts. You will be asked to choose a sandbox provider, a backlog manager, and a template:
+
+```bash
+npx sandcastle init
+```
+
+To skip the interactive prompt and select a template directly, pass the `--template` flag:
+
+```bash
+npx sandcastle init --template simple-loop
+```
+
+<Note>
+  If `.sandcastle/` already exists in your repo, `sandcastle init` will error to prevent overwriting your customizations. Run it in a fresh directory or remove `.sandcastle/` first.
+</Note>
+
+## File name: `.ts` vs `.mts`
+
+If your project's `package.json` contains `"type": "module"`, the scaffolded file is named `main.ts`. Otherwise it is named `main.mts`. Both are TypeScript files — the extension difference tells the Node.js module system how to interpret them.
+
+## Available templates
+
+| Template | Description |
+|---|---|
+| `blank` | Bare scaffold — write your own prompt and orchestration |
+| `simple-loop` | Picks issues one by one and closes them |
+| `sequential-reviewer` | Implements issues one by one, with a code review step after each |
+| `parallel-planner` | Plans parallelizable issues, executes on separate branches, then merges |
+| `parallel-planner-with-review` | Plans parallelizable issues, executes with per-branch review, then merges |
+
+### blank
+
+The `blank` template gives you an empty `prompt.md` and a minimal `main.ts` with a single `run()` call. Choose this when you have a specific workflow in mind and want to build it yourself without any pre-existing structure.
+
+What it scaffolds:
+- `prompt.md` — empty placeholder
+- `main.ts` — single `run()` call pointing at `.sandcastle/prompt.md`
+
+### simple-loop
+
+The `simple-loop` template sets up an agent that picks issues from your backlog one by one, works on them, and closes each one before moving to the next. This is the simplest production-ready workflow.
+
+What it scaffolds:
+- `prompt.md` — instructions to pick a single issue, implement it, and close it when done
+- `main.ts` — a loop that calls `run()` repeatedly until no issues remain
+
+### sequential-reviewer
+
+The `sequential-reviewer` template adds a code review step after each implementation. The same issue is handled by two agents in sequence: one implements, one reviews and fixes.
+
+What it scaffolds:
+- `prompt.md` — implementation instructions
+- `review.md` — review instructions
+- `main.ts` — a loop that calls `run()` twice per issue (implement, then review) using `createSandbox()` to keep both runs on the same branch
+
+### parallel-planner
+
+The `parallel-planner` template uses a planning agent to identify issues that can be worked on in parallel, then spawns one agent per issue on a separate branch. When all branches are done, a merge agent merges them back.
+
+What it scaffolds:
+- `plan.md` — instructions for the planning agent to emit a structured list of issues
+- `prompt.md` — implementation instructions for each parallel agent
+- `main.ts` — orchestration that runs the planner, fans out to parallel `run()` calls, and merges results
+
+### parallel-planner-with-review
+
+The `parallel-planner-with-review` template extends the parallel planner by adding a per-branch review step. After each implementation agent finishes, a review agent runs on the same branch before the merge step.
+
+What it scaffolds:
+- `plan.md` — planning instructions
+- `prompt.md` — implementation instructions
+- `review.md` — review instructions
+- `main.ts` — orchestration with planning, parallel implement-then-review, and merge
+
+## Backlog managers
+
+During `sandcastle init`, you also choose a backlog manager — the source of tasks your agent works from. The two built-in options are:
+
+- **GitHub Issues** — the agent uses the `gh` CLI to list and close issues
+- **Beads** — a lightweight local task list that ships with Sandcastle
+
+Your choice affects what gets installed in the `Dockerfile` (or `Containerfile` for Podman) and what commands appear in the scaffolded `prompt.md`. Both backlog managers work with all five templates.
+
+<Tip>
+  You can re-run `sandcastle init` in a fresh directory to try a different template without affecting your existing `.sandcastle/` directory.
+</Tip>

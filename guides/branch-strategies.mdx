@@ -1,0 +1,126 @@
+---
+title: "Branch strategies: head, merge-to-head, and branch"
+description: "Understand how Sandcastle's three branch strategies control where agent commits land, and how to choose the right one for your workflow."
+---
+
+Every `run()` call has a branch strategy that controls where the agent's commits end up. Sandcastle supports three strategies — `head`, `merge-to-head`, and `branch` — and each sandbox provider has a default. Choosing the right strategy depends on whether you want commits applied directly to your working directory, merged back after the run, or kept on a named branch.
+
+## The three strategies
+
+### head
+
+The agent writes directly to the host working directory. There is no worktree, no branch indirection — the agent edits files in place, and any commits land on the branch you are currently on.
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  branchStrategy: { type: "head" },
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+`head` is the default for bind-mount sandbox providers (Docker, Podman). It is the simplest strategy and requires no git branching overhead.
+
+<Warning>
+  `head` is not valid for isolated sandbox providers. Isolated providers (such as Vercel) cannot write directly to the host filesystem. If you pass `{ type: "head" }` to an isolated provider, Sandcastle catches it at the type level.
+</Warning>
+
+### merge-to-head
+
+Sandcastle creates a temporary branch in a git worktree. The agent works on the temp branch, and when the run completes, Sandcastle merges the temp branch back into your current HEAD branch. The temporary branch is deleted after the merge.
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  branchStrategy: { type: "merge-to-head" },
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+`merge-to-head` is the default for isolated sandbox providers. It is also a good choice for bind-mount providers when you want the agent to work in isolation and have its changes merged back automatically.
+
+### branch
+
+Commits land on an explicitly named branch in a git worktree. The branch is created if it does not exist, and it is not merged anywhere automatically — the commits stay there permanently.
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+Use the `branch` strategy when you want to review the agent's work before merging, run multiple parallel agents on separate branches, or drive a PR workflow.
+
+## Setting the branch strategy
+
+Pass `branchStrategy` as an option on `run()`:
+
+```typescript
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  promptFile: ".sandcastle/prompt.md",
+});
+
+console.log(result.branch); // "agent/fix-42"
+```
+
+If you omit `branchStrategy`, the provider's default applies:
+
+| Provider type | Default strategy |
+|---|---|
+| Bind-mount (Docker, Podman) | `head` |
+| Isolated (Vercel) | `merge-to-head` |
+
+## Source branch and target branch
+
+When you use `merge-to-head` or `branch`, Sandcastle tracks two branches:
+
+- **Source branch** — the branch the agent works on. For `branch`, this is the name you provide. For `merge-to-head`, it is a Sandcastle-generated temporary branch.
+- **Target branch** — the host's active branch at `run()` time. For `merge-to-head`, this is the branch Sandcastle merges back into.
+
+Both are available as built-in prompt arguments in your prompt templates:
+
+```markdown
+You are working on {{SOURCE_BRANCH}}.
+Your changes will be merged into {{TARGET_BRANCH}} when done.
+```
+
+See the [Prompts guide](/guides/prompts) for more on built-in prompt arguments.
+
+## Worktree location
+
+When using `merge-to-head` or `branch`, Sandcastle creates a git worktree on the host at:
+
+```
+.sandcastle/worktrees/<branch-name>/
+```
+
+For bind-mount providers, this directory is mounted directly into the sandbox. For isolated providers, it serves as the sync destination — commits from the sandbox are pulled back into the worktree.
+
+<Tip>
+  Worktrees from completed runs are cleaned up automatically. If the worktree has uncommitted changes when the sandbox closes, Sandcastle preserves it on disk and reports its path in `closeResult.preservedWorktreePath` (available via `createSandbox()` and `createWorktree()`).
+</Tip>
+
+## Choosing a strategy
+
+<CardGroup cols={2}>
+  <Card title="head" icon="arrow-right">
+    Use when you want changes applied directly to your working directory and you are using a bind-mount provider. Fastest and simplest.
+  </Card>
+  <Card title="merge-to-head" icon="git-merge">
+    Use when you want the agent to work in isolation and have its changes merged back to your current branch automatically. The default for isolated providers.
+  </Card>
+  <Card title="branch" icon="git-branch">
+    Use when you want to keep agent commits on a named branch for review, or when running parallel agents on separate branches.
+  </Card>
+  <Card title="head + isolated provider" icon="ban">
+    Not supported. Isolated providers cannot write directly to the host filesystem. Use `merge-to-head` or `branch` instead.
+  </Card>
+</CardGroup>

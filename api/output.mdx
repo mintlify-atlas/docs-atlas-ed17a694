@@ -1,0 +1,167 @@
+---
+title: "Output — structured output extraction from agent responses"
+description: "Extract schema-validated JSON or plain strings from agent stdout via XML tags. Covers Output.object(), Output.string(), and StructuredOutputError."
+---
+
+The `Output` helper lets you extract a structured payload from an agent's response. Instead of parsing the agent's free-form text yourself, you instruct the agent to emit its answer inside a named XML tag, and Sandcastle locates the tag, parses the content, validates it against your schema, and returns it as a typed field on `result.output`.
+
+Both Zod and Valibot schemas work because Sandcastle uses the [Standard Schema](https://standardschema.dev/) interface under the hood — any library that implements `StandardSchemaV1` is supported.
+
+## Import
+
+```typescript
+import { Output, StructuredOutputError } from "@ai-hero/sandcastle";
+import { z } from "zod";
+```
+
+## `Output.object()` — JSON with schema validation
+
+Use `Output.object()` when the agent should return structured data. The agent emits JSON inside the configured XML tag, Sandcastle parses it and validates it against your schema, and the inferred type flows through to `result.output`.
+
+```typescript
+import { run, Output, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { z } from "zod";
+
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: `Analyze the code, and output the result as JSON inside <result> tags.
+The result must match this schema:
+{ summary: string; score: number }`,
+  output: Output.object({
+    tag: "result",
+    schema: z.object({ summary: z.string(), score: z.number() }),
+  }),
+});
+
+console.log(result.output.summary); // typed as string
+console.log(result.output.score);   // typed as number
+```
+
+### Signature
+
+```typescript
+Output.object<Schema extends StandardSchemaV1>(opts: {
+  tag: string;
+  schema: Schema;
+}): OutputObjectDefinition<StandardSchemaV1.InferOutput<Schema>>
+```
+
+<ParamField path="tag" type="string" required>
+  The XML tag name the agent will emit its JSON inside. For example `"result"` expects the agent to produce `<result>{"key":"value"}</result>`. The resolved prompt must contain the literal opening tag `<result>` — if it does not, `run()` throws before starting the sandbox.
+</ParamField>
+
+<ParamField path="schema" type="StandardSchemaV1" required>
+  A Standard Schema validator (Zod, Valibot, etc.) used to validate the parsed JSON. The inferred output type becomes the type of `result.output`.
+</ParamField>
+
+## `Output.string()` — plain string extraction
+
+Use `Output.string()` when you only need the raw text inside the tag, with no JSON parsing or schema validation.
+
+```typescript
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: "Summarize the changes inside <summary> tags.",
+  output: Output.string({ tag: "summary" }),
+});
+
+console.log(result.output); // typed as string, whitespace-trimmed
+```
+
+### Signature
+
+```typescript
+Output.string(opts: { tag: string }): OutputStringDefinition
+```
+
+<ParamField path="tag" type="string" required>
+  The XML tag name. Tag contents are whitespace-trimmed and returned as a plain string — no JSON parsing, no schema validation.
+</ParamField>
+
+## Type definitions
+
+### `OutputObjectDefinition<T>`
+
+```typescript
+interface OutputObjectDefinition<T> {
+  readonly _tag: "object";
+  readonly tag: string;
+  readonly schema: StandardSchemaV1<unknown, T>;
+}
+```
+
+### `OutputStringDefinition`
+
+```typescript
+interface OutputStringDefinition {
+  readonly _tag: "string";
+  readonly tag: string;
+}
+```
+
+### `OutputDefinition`
+
+```typescript
+type OutputDefinition = OutputObjectDefinition<any> | OutputStringDefinition;
+```
+
+The union type accepted by the `output` field on `RunOptions`.
+
+## `StructuredOutputError`
+
+`StructuredOutputError` is thrown by `run()` when structured output extraction or validation fails. Possible failure modes:
+
+- The configured XML tag was not found in the agent's stdout (`rawMatched` is `undefined`).
+- The tag contents failed `JSON.parse` (`cause` carries the parse error).
+- The parsed JSON failed schema validation (`cause` carries the Standard Schema issues array).
+
+The error carries run side effects — commits and branch — so you can handle recovery without losing the agent's work.
+
+```typescript
+import { StructuredOutputError } from "@ai-hero/sandcastle";
+
+try {
+  const result = await run({ ..., output: Output.object({ tag: "result", schema }) });
+} catch (err) {
+  if (err instanceof StructuredOutputError) {
+    console.error("Tag:", err.tag);
+    console.error("Raw match:", err.rawMatched);
+    console.error("Commits still made:", err.commits);
+    console.error("Branch:", err.branch);
+  }
+}
+```
+
+<ResponseField name="tag" type="string">
+  The XML tag that was searched for.
+</ResponseField>
+
+<ResponseField name="rawMatched" type="string | undefined">
+  The raw string content found between the opening and closing tags. `undefined` when the tag was not found in stdout at all.
+</ResponseField>
+
+<ResponseField name="cause" type="unknown">
+  The underlying parse or validation error. A JSON `SyntaxError` for parse failures, or a Standard Schema issues array for validation failures.
+</ResponseField>
+
+<ResponseField name="commits" type="{ sha: string }[]">
+  Commits the agent created during the run. Available even when output extraction fails.
+</ResponseField>
+
+<ResponseField name="branch" type="string">
+  The branch name the agent worked on.
+</ResponseField>
+
+<ResponseField name="preservedWorktreePath" type="string | undefined">
+  Host path to the preserved worktree, if the worktree had uncommitted changes.
+</ResponseField>
+
+## Constraints
+
+- `maxIterations` must be `1` (the default). Passing `output` with `maxIterations > 1` throws before the sandbox starts.
+- The resolved prompt must contain the opening tag literal — for example `<result>`. If the tag is not present in the prompt, `run()` throws before starting the sandbox.
+- `Output.string()` and `Output.object()` both require `maxIterations === 1`.
+- Standard Schema support covers Zod, Valibot, and any other library that implements `StandardSchemaV1`.

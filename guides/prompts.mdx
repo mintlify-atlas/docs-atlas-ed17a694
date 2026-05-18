@@ -1,0 +1,180 @@
+---
+title: "Prompts: inline strings and prompt templates"
+description: "Learn how to pass prompts to Sandcastle agents using inline strings or prompt template files with argument substitution and shell expressions."
+---
+
+Sandcastle gives you two ways to supply a prompt to an agent: an inline string you construct in JavaScript, or a prompt template file that Sandcastle processes before handing it to the agent. Understanding the difference — and when to use each — is the starting point for building reliable agent workflows.
+
+## Two ways to provide a prompt
+
+You must provide exactly one of `prompt` or `promptFile` on every `run()` call. Providing both is an error; omitting both is also an error.
+
+```typescript
+// Inline prompt
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: "Fix the failing tests in src/auth/",
+});
+
+// Prompt template file
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+<Note>
+  `sandcastle init` scaffolds `.sandcastle/prompt.md` and all built-in templates reference it via `promptFile: ".sandcastle/prompt.md"`. This is a convention, not an automatic fallback — Sandcastle does not read `.sandcastle/prompt.md` unless you pass it as `promptFile`.
+</Note>
+
+## Inline prompts
+
+When you use `prompt: "..."`, the string is passed to the agent exactly as you wrote it. There is no `{{KEY}}` substitution, no `` !`command` `` shell expansion, and no built-in argument injection. The string goes directly to the agent, unchanged.
+
+If you need to embed a dynamic value in an inline prompt, construct the string in JavaScript:
+
+```typescript
+const branch = "feature/auth";
+const issueNumber = 42;
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: `Fix issue #${issueNumber} on branch ${branch}.`,
+});
+```
+
+Passing `promptArgs` alongside an inline prompt is an error. The substitution system only works with prompt templates. If you find yourself needing `promptArgs`, switch to `promptFile`.
+
+## Prompt templates
+
+When you use `promptFile`, Sandcastle reads the file and processes it through two stages before sending it to the agent:
+
+1. **Prompt argument substitution** — replaces `{{KEY}}` placeholders with values from `promptArgs` (runs on the host)
+2. **Prompt expansion** — evaluates `` !`command` `` shell expressions (runs inside the sandbox)
+
+Both stages are skipped if there are no matches in the file.
+
+### Prompt argument substitution
+
+Put `{{KEY}}` placeholders in your prompt file, then pass the values via `promptArgs`:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  promptArgs: {
+    ISSUE_NUMBER: 42,
+    PRIORITY: "high",
+  },
+});
+```
+
+In `.sandcastle/prompt.md`:
+
+```markdown
+Work on issue #{{ISSUE_NUMBER}} (priority: {{PRIORITY}}).
+```
+
+`promptArgs` accepts `string`, `number`, or `boolean` values. Substitution runs on the host before the sandbox starts.
+
+**Error and warning behavior:**
+
+- A `{{KEY}}` placeholder with no matching entry in `promptArgs` is an error — the run fails before the sandbox is created.
+- A `promptArgs` key that is not referenced anywhere in the prompt produces a warning, but the run continues.
+
+### Built-in prompt arguments
+
+Sandcastle automatically injects two arguments into every prompt template. You do not need to pass these in `promptArgs`:
+
+| Placeholder | Value |
+|---|---|
+| `{{SOURCE_BRANCH}}` | The branch the agent works on (determined by the branch strategy) |
+| `{{TARGET_BRANCH}}` | The host's active branch at `run()` time |
+
+```markdown
+You are working on {{SOURCE_BRANCH}}.
+When diffing, compare against {{TARGET_BRANCH}}.
+```
+
+Passing `SOURCE_BRANCH` or `TARGET_BRANCH` in `promptArgs` is an error — built-in prompt arguments cannot be overridden.
+
+### Shell expressions
+
+Use `` !`command` `` in your prompt file to pull in dynamic context from inside the sandbox. Each expression is replaced with the command's stdout before the prompt reaches the agent:
+
+```markdown
+# Open issues
+
+!`gh issue list --state open --label Sandcastle --json number,title,body,comments,labels --limit 20`
+
+# Recent commits
+
+!`git log --oneline -10`
+```
+
+Shell expressions run inside the sandbox after `sandbox.onSandboxReady` hooks complete, so they see the same environment the agent sees — including installed dependencies.
+
+All expressions in a single prompt run **in parallel** for faster expansion. If any command exits with a non-zero code, the run fails immediately.
+
+<Warning>
+  Shell expressions only execute when they appear literally in the prompt file. Any `` !`...` `` pattern that arrives via `promptArgs` is treated as inert text and is never executed. This makes it safe to pass user-authored content (issue titles, PR descriptions) through `promptArgs`.
+</Warning>
+
+### Substitution order
+
+Prompt argument substitution always runs before shell expansion. This means you can embed `promptArgs` values inside shell expressions:
+
+```markdown
+!`gh issue view {{ISSUE_NUMBER}} --json body -q .body`
+```
+
+Sandcastle replaces `{{ISSUE_NUMBER}}` with its value first (on the host), then evaluates the shell expression inside the sandbox.
+
+### Example prompt template
+
+Here is a complete prompt template that uses both features:
+
+```markdown
+You are working on {{SOURCE_BRANCH}}.
+
+# Issue to fix
+
+!`gh issue view {{ISSUE_NUMBER}} --json title,body -q '"## \(.title)\n\(.body)"'`
+
+# Recent changes
+
+!`git log --oneline -5`
+
+Fix the issue and commit your changes.
+When you are done, output <promise>COMPLETE</promise>.
+```
+
+## Completion signals
+
+By default, when the agent outputs `<promise>COMPLETE</promise>`, the iteration loop stops early. This signal is a convention — you document it in your prompt, and the agent outputs it when finished.
+
+You can override the default signal using the `completionSignal` option:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  completionSignal: "DONE",
+});
+```
+
+Pass an array to stop on the first match from multiple possible signals:
+
+```typescript
+await run({
+  completionSignal: ["TASK_COMPLETE", "TASK_ABORTED"],
+  // ...
+});
+```
+
+The matched signal string is returned as `result.completionSignal`.

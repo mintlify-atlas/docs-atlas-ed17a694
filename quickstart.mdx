@@ -1,81 +1,157 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Get started with Sandcastle in 5 minutes"
+description: "Install the @ai-hero/sandcastle package, scaffold your config directory, configure your API key, and run your first AI coding agent in an isolated sandbox."
 ---
 
-## Get started in three steps
+Sandcastle is a TypeScript library that orchestrates AI coding agents inside isolated sandboxes. This page walks you through everything you need — from installing the package to running your first agent — so you reach a working state as quickly as possible.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, make sure you have the following installed:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- [Git](https://git-scm.com/) — Sandcastle uses git worktrees to manage branches
+- A sandbox provider — Sandcastle needs an isolated environment to run the agent in:
+  - [Docker Desktop](https://www.docker.com/) — the most common choice for local development
+  - [Podman](https://podman.io/) — a rootless alternative to Docker
+  - [Vercel](https://vercel.com/) — cloud-based Firecracker microVMs via `@vercel/sandbox`
 
-### Step 2: Deploy your changes
+<Note>
+  You only need one sandbox provider. Docker Desktop is the recommended starting point if you don't have a preference.
+</Note>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Set up Sandcastle
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Steps>
+  <Step title="Install the package">
+    Add `@ai-hero/sandcastle` as a dev dependency in your project.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    <CodeGroup>
 
-### Step 3: Go live
+    ```bash npm
+    npm install --save-dev @ai-hero/sandcastle
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash pnpm
+    pnpm add -D @ai-hero/sandcastle
+    ```
+
+    ```bash yarn
+    yarn add --dev @ai-hero/sandcastle
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Scaffold the config directory">
+    Run `sandcastle init` to create the `.sandcastle/` config directory. The command prompts you to choose a sandbox provider (Docker or Podman), a backlog manager (GitHub Issues or Beads), and a workflow template.
+
+    ```bash
+    npx sandcastle init
+    ```
+
+    This creates the following files:
+
+    ```
+    .sandcastle/
+    ├── Dockerfile       # Sandbox environment — customize as needed
+    ├── main.ts          # Entry point for running the agent
+    ├── prompt.md        # Agent instructions
+    ├── .env.example     # API key placeholders
+    └── .gitignore       # Ignores .env and logs/
+    ```
+
+    <Tip>
+      If your `package.json` sets `"type": "module"`, the entry point is named `main.ts`. Otherwise it is `main.mts`. Both work identically.
+    </Tip>
+  </Step>
+
+  <Step title="Configure your API key">
+    Copy the example env file and fill in your `ANTHROPIC_API_KEY`.
+
+    ```bash
+    cp .sandcastle/.env.example .sandcastle/.env
+    ```
+
+    Open `.sandcastle/.env` and set your key:
+
+    ```bash
+    ANTHROPIC_API_KEY=sk-ant-...
+    ```
+
+    <Warning>
+      `.sandcastle/.env` is listed in `.sandcastle/.gitignore` by default. Do not commit it — it contains your API credentials.
+    </Warning>
+  </Step>
+
+  <Step title="Edit the prompt file">
+    Open `.sandcastle/prompt.md` and write the instructions you want the agent to follow. This file is passed directly to the agent at the start of each iteration.
+
+    ```markdown
+    You are working on {{SOURCE_BRANCH}}.
+
+    Fix the failing tests in the `src/` directory. When you are done, output:
+
+    <promise>COMPLETE</promise>
+    ```
+
+    <Note>
+      `{{SOURCE_BRANCH}}` and `{{TARGET_BRANCH}}` are built-in prompt arguments that Sandcastle injects automatically — you do not need to pass them via `promptArgs`.
+    </Note>
+  </Step>
+
+  <Step title="Run the agent">
+    Execute the scaffolded entry point with `npx tsx`:
+
+    ```bash
+    npx tsx .sandcastle/main.ts
+    ```
+
+    Sandcastle starts the sandbox, mounts your repository, passes your prompt to the agent, and writes progress to a log file under `.sandcastle/logs/`. You will see a `tail -f` command printed to the terminal so you can follow along.
+  </Step>
+</Steps>
+
+## Minimal TypeScript example
+
+The full `.sandcastle/main.ts` entry point that `sandcastle init` scaffolds is a thin wrapper around the `run()` function. Here is the minimal version:
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(), // or podman(), vercel(), or your own provider
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+`run()` returns a `RunResult` with the commits the agent made, the branch it worked on, and the number of iterations it completed:
+
+```typescript
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+
+console.log(result.iterations.length); // number of iterations executed
+console.log(result.commits);           // [{ sha: "abc123" }, ...]
+console.log(result.branch);            // branch the agent worked on
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Key concepts" icon="book-open" href="/concepts">
+    Understand sandboxes, agents, branch strategies, and how Sandcastle orchestrates them.
+  </Card>
+  <Card title="Sandbox providers" icon="box" href="/sandboxes/docker">
+    Configure Docker, Podman, or Vercel as your sandbox environment.
+  </Card>
+  <Card title="Prompts guide" icon="file-lines" href="/guides/prompts">
+    Use prompt arguments, shell expressions, and built-in variables in your prompt files.
+  </Card>
+  <Card title="Branch strategies" icon="code-branch" href="/guides/branch-strategies">
+    Control how the agent's commits land — directly on HEAD, a temp branch, or a named branch.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

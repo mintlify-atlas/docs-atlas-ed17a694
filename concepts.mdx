@@ -1,0 +1,214 @@
+---
+title: "Core concepts: how Sandcastle works"
+description: "Understand the building blocks of Sandcastle — sandboxes, agents, branch strategies, worktrees, prompts, and how they fit together."
+---
+
+Sandcastle is a TypeScript library that orchestrates AI coding agents inside isolated sandboxes. Before you configure a workflow or write a prompt, it helps to understand the vocabulary Sandcastle uses. This page defines each concept, explains how the pieces fit together, and links to the relevant guides where you can go deeper.
+
+## Sandbox
+
+A **sandbox** is the isolation boundary around the agent — a container, VM, or similar environment that constrains what the agent can access. The sandbox runs your code in a controlled environment so the agent's changes stay contained until you decide to merge them.
+
+- Docker and Podman create sandboxes as containers on your machine
+- Vercel creates sandboxes as Firecracker microVMs in the cloud
+- Sandcastle mounts your repository into the sandbox (for bind-mount providers) or syncs code in and commits out (for isolated providers)
+
+Do not confuse a Sandcastle sandbox with Claude Code's built-in "docker sandbox" feature — they are separate concepts.
+
+## Host
+
+The **host** is your machine — where Sandcastle runs, where the real git repository lives, and where the `.sandcastle/` config directory is stored.
+
+Sandcastle distinguishes between the host and the sandbox because both have their own filesystems. For bind-mount providers like Docker, the host's worktree directory is mounted directly into the sandbox, so writes from the agent appear on the host immediately. For isolated providers like Vercel, code is synced in and commits are extracted back out.
+
+## Agent
+
+An **agent** is the AI coding tool invoked inside the sandbox — for example, Claude Code or Codex. Sandcastle is provider-agnostic: you swap agents by changing the `agent` option in `run()`.
+
+```typescript
+import { claudeCode } from "@ai-hero/sandcastle";
+
+// Use Claude Opus
+claudeCode("claude-opus-4-7")
+
+// Use Claude Sonnet with a specific effort level
+claudeCode("claude-sonnet-4-6", { effort: "high" })
+```
+
+Sandcastle also ships with `codex()`, `opencode()`, and `pi()` agent providers.
+
+## Agent provider
+
+An **agent provider** is the pluggable implementation that builds commands and parses output for a specific agent. You inject it into `run()` via the `agent` option. Each provider declares which environment variables it needs (for example `ANTHROPIC_API_KEY`) and supplies its own Dockerfile snippet so the agent binary is available inside the sandbox.
+
+Supported built-in agent providers: `claudeCode`, `codex`, `opencode`, `pi`.
+
+## Sandbox provider
+
+A **sandbox provider** is the pluggable implementation that creates and manages a sandbox. You inject it into `run()` via the `sandbox` option. There are three kinds:
+
+- **Bind-mount sandbox provider** — the host filesystem is mounted directly into the sandbox. Docker and Podman are bind-mount providers. The agent writes to the host filesystem through the mount, so no sync step is needed. This is the default for local development.
+- **Isolated sandbox provider** — the sandbox has its own filesystem. Code is synced in before the run, and commits are extracted back out afterward. Vercel is an isolated provider.
+- **No-sandbox provider** (`noSandbox()`) — no container is created; the agent runs directly on the host. Only accepted by `interactive()`, not `run()`, because AFK (unattended) runs always require isolation.
+
+Sandbox providers are imported from subpaths — never from the main `@ai-hero/sandcastle` entry point:
+
+```typescript
+import { docker }    from "@ai-hero/sandcastle/sandboxes/docker";
+import { podman }    from "@ai-hero/sandcastle/sandboxes/podman";
+import { vercel }    from "@ai-hero/sandcastle/sandboxes/vercel";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
+```
+
+## Branch strategy
+
+A **branch strategy** controls how the agent's changes relate to git branches. You set it on `run()` via the `branchStrategy` option. Three strategies are available:
+
+| Strategy | Config | Description |
+|---|---|---|
+| **Head** | `{ type: "head" }` | The agent writes directly to your host working directory. No worktree, no branch indirection. Default for bind-mount providers. |
+| **Merge-to-head** | `{ type: "merge-to-head" }` | Sandcastle creates a temporary branch in a worktree, the agent works on it, and changes are merged back to HEAD when done. The temp branch is then deleted. Default for isolated providers. |
+| **Branch** | `{ type: "branch", branch: "agent/fix-42" }` | Commits land on an explicitly named branch. Use this when you want the agent's work to stay on a separate branch for review. |
+
+<Note>
+  The **head** strategy is not available for isolated providers, because an isolated sandbox has no direct access to the host working directory.
+</Note>
+
+## Worktree
+
+A **worktree** is a git worktree created in `.sandcastle/worktrees/` on the host. Sandcastle creates worktrees automatically when you use the **merge-to-head** or **branch** strategies — you never create them manually unless you use the `createWorktree()` API directly.
+
+For bind-mount providers, the worktree directory is mounted into the sandbox container, so the agent writes directly to the host filesystem through the mount.
+
+## Iteration
+
+An **iteration** is a single invocation of the agent inside the sandbox. One call to `run()` can execute multiple iterations — controlled by the `maxIterations` option (default: `1`). Each iteration may produce one or more commits. Iterations repeat until the agent emits the completion signal or the maximum count is reached.
+
+```typescript
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  maxIterations: 5, // run up to 5 iterations
+});
+
+console.log(result.iterations.length); // actual iterations that ran
+```
+
+## Prompt, prompt template, and prompt arguments
+
+Sandcastle's prompt system has three layers:
+
+- **Inline prompt** — a string passed directly via `prompt: "..."`. Passed to the agent as-is, with no substitution or expansion. Use this for simple, static instructions.
+- **Prompt template** — a file passed via `promptFile: ".sandcastle/prompt.md"`. May contain `{{KEY}}` placeholders and `` !`command` `` shell expressions that are resolved before the prompt is sent to the agent.
+- **Prompt arguments** — key-value pairs passed via `promptArgs` that substitute `{{KEY}}` placeholders in a prompt template.
+
+```typescript
+await run({
+  promptFile: ".sandcastle/prompt.md",
+  promptArgs: { ISSUE_NUMBER: "42" },
+});
+```
+
+In the prompt file:
+
+```markdown
+Work on issue #{{ISSUE_NUMBER}}.
+
+Recent commits:
+!`git log --oneline -10`
+```
+
+Substitution runs in two passes:
+1. **Prompt argument substitution** — replaces `{{KEY}}` placeholders on the host before the sandbox exists
+2. **Prompt expansion** — evaluates `` !`command` `` shell expressions inside the sandbox, just before each iteration
+
+Sandcastle automatically injects two **built-in prompt arguments** you can use without passing them via `promptArgs`:
+
+| Placeholder | Value |
+|---|---|
+| `{{SOURCE_BRANCH}}` | The branch the agent works on (determined by the branch strategy) |
+| `{{TARGET_BRANCH}}` | The host's active branch at `run()` time |
+
+## Completion signal
+
+The **completion signal** is a string the agent outputs to stop the iteration loop early. The default signal is `<promise>COMPLETE</promise>`. You document this convention in your prompt file and instruct the agent to emit it when it finishes its task.
+
+```markdown
+When you have finished all tasks, output exactly:
+
+<promise>COMPLETE</promise>
+```
+
+When Sandcastle detects the signal in the agent's output, it stops the iteration loop immediately. The matched signal is returned as `result.completionSignal`.
+
+You can override the default signal or supply multiple signals:
+
+```typescript
+await run({
+  // ...
+  completionSignal: ["TASK_COMPLETE", "TASK_ABORTED"],
+});
+```
+
+The completion signal carries no payload — it is a pure termination marker. To return data from the agent, use structured output instead.
+
+## Structured output
+
+**Structured output** lets you extract a typed, schema-validated JSON payload from the agent's stdout. The agent emits its answer inside an XML tag you choose, and Sandcastle parses and validates it against a Zod schema.
+
+```typescript
+import { run, Output, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { z } from "zod";
+
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: `Analyze the code and output the result inside <result> tags as JSON.
+    Schema: { summary: string; score: number }`,
+  output: Output.object({
+    tag: "result",
+    schema: z.object({ summary: z.string(), score: z.number() }),
+  }),
+});
+
+console.log(result.output.summary); // typed as string
+console.log(result.output.score);   // typed as number
+```
+
+Use `Output.string({ tag })` to extract the tag contents as a plain string instead of JSON.
+
+Structured output requires `maxIterations` to be `1` (the default), and the resolved prompt must contain the configured opening tag.
+
+<Note>
+  Structured output and the completion signal are orthogonal — a run can use either, both, or neither.
+</Note>
+
+## How the pieces fit together
+
+Here is how a typical `run()` call works end to end:
+
+1. Sandcastle reads env vars from `.sandcastle/.env` and merges them with `process.env`
+2. Based on the `branchStrategy`, Sandcastle creates a worktree (or skips this for **head** strategy)
+3. Sandcastle starts the sandbox container and mounts the worktree (or syncs code in for isolated providers)
+4. Lifecycle hooks run: `host.onWorktreeReady`, then `host.onSandboxReady` and `sandbox.onSandboxReady` in parallel
+5. Prompt argument substitution replaces `{{KEY}}` placeholders on the host
+6. For each iteration, prompt expansion evaluates `` !`command` `` shell expressions inside the sandbox, then the agent is invoked
+7. The iteration loop stops when the completion signal fires or `maxIterations` is reached
+8. The sandbox is torn down; for **merge-to-head** strategy, the temp branch is merged back to HEAD
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run your first agent in under 5 minutes.
+  </Card>
+  <Card title="Prompts guide" icon="file-lines" href="/guides/prompts">
+    Dive deeper into prompt templates, shell expressions, and built-in arguments.
+  </Card>
+  <Card title="Branch strategies" icon="code-branch" href="/guides/branch-strategies">
+    Learn when to use head, merge-to-head, or a named branch.
+  </Card>
+  <Card title="Sandbox providers" icon="box" href="/sandboxes/docker">
+    Configure Docker, Podman, or Vercel for your workflow.
+  </Card>
+</CardGroup>

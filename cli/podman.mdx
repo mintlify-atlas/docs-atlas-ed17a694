@@ -1,0 +1,92 @@
+---
+title: "sandcastle podman: build and remove Podman images"
+description: "Use sandcastle podman build-image to rebuild your Podman sandbox image after modifying the Containerfile, and sandcastle podman remove-image to clean it up."
+---
+
+The `sandcastle podman` subcommands manage the Podman image that Sandcastle uses to create agent sandboxes. They work the same way as the Docker equivalents, with one key difference: Podman uses `Containerfile` instead of `Dockerfile`. Run `sandcastle podman build-image` once after `sandcastle init` (when you chose Podman as your sandbox provider), and again whenever you modify the `Containerfile`.
+
+## `sandcastle podman build-image`
+
+Builds the Podman image from `.sandcastle/Containerfile`. Run this command after `sandcastle init` with the Podman provider selected, or any time you modify the `Containerfile`.
+
+```bash
+npx sandcastle podman build-image
+```
+
+### When to rebuild
+
+Rebuild the image after:
+
+- Modifying `.sandcastle/Containerfile`
+- Changing the base image or installed packages
+- Updating agent tools in the image
+
+### Options
+
+<ParamField path="--image-name" type="string">
+  Podman image name. Defaults to `sandcastle:<repo-dir-name>`, derived from the basename of your repo directory. Pass this flag if you used a custom name during `sandcastle init`.
+</ParamField>
+
+<ParamField path="--containerfile" type="string">
+  Path to a custom Containerfile. When provided, the build context is set to the current working directory rather than `.sandcastle/`. Use this if your Containerfile lives outside the config directory or references files from the repo root.
+</ParamField>
+
+### Example
+
+```bash
+# Build using the default image name and .sandcastle/Containerfile
+npx sandcastle podman build-image
+
+# Build with a custom image name
+npx sandcastle podman build-image --image-name my-org/sandcastle:latest
+
+# Build from a Containerfile outside .sandcastle/
+npx sandcastle podman build-image --containerfile ./podman/Agent.Containerfile
+```
+
+## `sandcastle podman remove-image`
+
+Removes the Podman image from your local Podman storage. Use this to free disk space after finishing a project, or before rebuilding from a different base image.
+
+```bash
+npx sandcastle podman remove-image
+```
+
+### Options
+
+<ParamField path="--image-name" type="string">
+  Podman image name to remove. Defaults to `sandcastle:<repo-dir-name>`. Pass this flag if you used a custom name.
+</ParamField>
+
+### Example
+
+```bash
+# Remove the default image
+npx sandcastle podman remove-image
+
+# Remove a named image
+npx sandcastle podman remove-image --image-name my-org/sandcastle:latest
+```
+
+## Default image name
+
+Both commands default to `sandcastle:<repo-dir-name>`, where `<repo-dir-name>` is the basename of your repo's root directory. For example, if your repo lives at `/Users/alice/projects/my-app`, the default image name is `sandcastle:my-app`.
+
+Pass `--image-name` to both `sandcastle podman build-image` and your `podman()` provider call if you use a custom name:
+
+```typescript
+import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
+
+await run({
+  sandbox: podman({ imageName: "my-org/sandcastle:latest" }),
+  // ...
+});
+```
+
+## Containerfile vs Dockerfile
+
+When you select Podman during `sandcastle init`, the scaffolded file is named `Containerfile` rather than `Dockerfile`. The contents follow the same OCI image format — the name difference is a Podman convention. The `sandcastle podman build-image` command passes this filename to `podman build` automatically.
+
+<Tip>
+  Podman is a rootless alternative to Docker. It runs containers without a daemon and does not require root privileges, which makes it a good choice for environments where Docker Desktop is unavailable or unwanted.
+</Tip>

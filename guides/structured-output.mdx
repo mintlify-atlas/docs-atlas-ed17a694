@@ -1,0 +1,106 @@
+---
+title: "Structured output: extracting typed data from agents"
+description: "Use Output.object and Output.string to extract schema-validated JSON or plain strings from agent stdout, with full TypeScript type inference on the result."
+---
+
+Sandcastle's structured output feature lets you extract a typed payload from an agent's output. Instead of parsing the agent's stdout yourself, you declare what you expect — an XML tag and an optional schema — and Sandcastle handles extraction, validation, and type inference. The result is available on `result.output` with full TypeScript types.
+
+## Output.object
+
+Use `Output.object({ tag, schema })` to extract a JSON object from the agent's output. The agent emits its answer inside an XML tag you specify, and Sandcastle JSON-parses the contents and validates them against your schema.
+
+```typescript
+import { run, Output, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { z } from "zod";
+
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: `Analyze the code, and output the result as JSON inside <result> tags.
+    The result must match this schema:
+    { summary: string; score: string }
+  `,
+  output: Output.object({
+    tag: "result",
+    schema: z.object({ summary: z.string(), score: z.number() }),
+  }),
+});
+
+console.log(result.output.summary); // typed as string
+console.log(result.output.score);   // typed as number
+```
+
+The `schema` option accepts any [Standard Schema](https://standardschema.dev/)-compatible validator, including Zod and Valibot.
+
+## Output.string
+
+Use `Output.string({ tag })` to extract the contents of a tag as a plain string. The contents are whitespace-trimmed and returned as-is — no JSON parsing, no schema validation.
+
+```typescript
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  prompt: "Summarize the codebase inside <summary> tags.",
+  output: Output.string({ tag: "summary" }),
+});
+
+console.log(result.output); // typed as string
+```
+
+## Constraints
+
+Both `Output.object` and `Output.string` require `maxIterations` to be `1` (which is the default). Multi-iteration runs cannot use structured output.
+
+The resolved prompt must contain the configured opening tag literal. If you pass `output: Output.object({ tag: "result", ... })` but the prompt does not contain the text `<result>`, `run()` throws before the sandbox starts.
+
+<Note>
+  Sandcastle does not inject the prompt instruction telling the agent to emit the tag. You own that part. The prompt in the example above explicitly tells the agent to output JSON inside `<result>` tags — Sandcastle only handles the extraction and validation.
+</Note>
+
+## The output field on RunResult
+
+When you pass an `output` option to `run()`, the result object gains an `output` field typed as the schema's inferred type:
+
+```typescript
+// With Output.object and a Zod schema:
+// result.output is typed as { summary: string; score: number }
+
+// With Output.string:
+// result.output is typed as string
+```
+
+If you do not pass an `output` option, `result.output` is `undefined`.
+
+## StructuredOutputError
+
+If extraction or validation fails, `run()` throws a `StructuredOutputError`. This can happen when:
+
+- The configured XML tag was not found in the agent's stdout (`rawMatched` is `undefined`)
+- The tag contents could not be JSON-parsed (`cause` carries the parse error)
+- The parsed JSON failed schema validation (`cause` carries the validation issues)
+
+```typescript
+import { StructuredOutputError } from "@ai-hero/sandcastle";
+
+try {
+  const result = await run({
+    // ...
+    output: Output.object({ tag: "result", schema: z.object({ answer: z.number() }) }),
+  });
+} catch (err) {
+  if (err instanceof StructuredOutputError) {
+    console.error("Tag:", err.tag);
+    console.error("Raw match:", err.rawMatched);
+    console.error("Cause:", err.cause);
+    console.error("Commits:", err.commits); // commits made before the failure
+    console.error("Branch:", err.branch);
+  }
+}
+```
+
+The error carries `commits`, `branch`, and optionally `preservedWorktreePath` so you can inspect the agent's work even when output extraction fails.
+
+## Design note
+
+Sandcastle does not inspect or modify the prompt to inject output instructions. The `output` option is purely a post-processing declaration: you tell the agent what to emit in your prompt, and you tell Sandcastle what to extract via `output`. This separation means you have full control over how the instruction is worded, where it appears in the prompt, and what schema the agent is asked to conform to.

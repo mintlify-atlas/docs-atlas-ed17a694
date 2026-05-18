@@ -1,0 +1,120 @@
+---
+title: "RunOptions — complete options reference for run()"
+description: "Complete field reference for RunOptions passed to run(). Covers agent, sandbox, prompt, branchStrategy, hooks, logging, completionSignal, and timeouts."
+---
+
+`RunOptions` is the single options object passed to [`run()`](/api/run). Every field except `agent` and `sandbox` is optional. The table below lists all fields, their types, defaults, and descriptions.
+
+## Required fields
+
+<ParamField path="agent" type="AgentProvider" required>
+  Agent provider — for example `claudeCode("claude-opus-4-7")`, `pi("claude-sonnet-4-6")`, `codex("gpt-5.4-mini")`, or `opencode("opencode/big-pickle")`. Pass provider-specific options (like `effort`) as a second argument.
+</ParamField>
+
+<ParamField path="sandbox" type="SandboxProvider" required>
+  Sandbox provider — for example `docker()`, `podman()`, or `vercel()`. Provider-specific config (image name, mounts, env) lives inside the provider factory call. See [sandbox types](/api/sandbox-types).
+</ParamField>
+
+## Prompt
+
+<ParamField path="prompt" type="string">
+  Inline prompt passed to the agent literally. Mutually exclusive with `promptFile`. No `{{KEY}}` substitution, no `` !`command` `` expansion — build the string in JavaScript if you need dynamic values. Passing `promptArgs` alongside an inline `prompt` is an error.
+</ParamField>
+
+<ParamField path="promptFile" type="string">
+  Path to a prompt file. Mutually exclusive with `prompt`. Always resolves against `process.cwd()`, not against `cwd` — pass an absolute path when you set a custom `cwd` to avoid ambiguity. Supports `{{KEY}}` placeholder substitution and `` !`command` `` shell expression expansion.
+</ParamField>
+
+<ParamField path="promptArgs" type="PromptArgs">
+  Key-value map for `{{KEY}}` placeholder substitution in the prompt file. Only valid with `promptFile`. Sandcastle automatically injects `SOURCE_BRANCH` and `TARGET_BRANCH` — passing either of those as keys is an error.
+</ParamField>
+
+## Execution control
+
+<ParamField path="maxIterations" type="number" default="1">
+  Maximum number of agent iterations to run. The loop stops early if `completionSignal` is matched. Setting this above `1` is incompatible with `resumeSession` and with structured `output`.
+</ParamField>
+
+<ParamField path="completionSignal" type="string | string[]" default="&lt;promise&gt;COMPLETE&lt;/promise&gt;">
+  Substring or array of substrings the agent emits to stop the iteration loop early. Matched via `String.includes` against agent output. The matched string is returned as `result.completionSignal`.
+</ParamField>
+
+<ParamField path="idleTimeoutSeconds" type="number" default="600">
+  Idle timeout in seconds. Resets whenever the agent produces any output. If the agent is silent for this long, the run fails.
+</ParamField>
+
+<ParamField path="resumeSession" type="string">
+  Resume a prior Claude Code session by its session ID. The session JSONL file must exist on the host at `~/.claude/projects/<encoded-path>/sessions/<id>.jsonl`. Incompatible with `maxIterations > 1`. Only the first iteration receives the `--resume` flag.
+</ParamField>
+
+<ParamField path="signal" type="AbortSignal">
+  An `AbortSignal` that cancels the run when aborted. If already aborted at entry, `run()` rejects immediately without any setup. Aborting mid-iteration kills the in-flight agent subprocess and cancels lifecycle hooks. The worktree is preserved on disk. The rejected promise surfaces `signal.reason` directly.
+</ParamField>
+
+## Repository and branch
+
+<ParamField path="cwd" type="string" default="process.cwd()">
+  Host repo directory — replaces `process.cwd()` as the anchor for `.sandcastle/` artifacts (worktrees, logs, env, patches) and git operations. Relative paths resolve against `process.cwd()`.
+</ParamField>
+
+<ParamField path="branchStrategy" type="BranchStrategy">
+  Controls where the agent's commits land. Defaults to `{ type: "head" }` for bind-mount providers and `{ type: "merge-to-head" }` for isolated providers.
+
+  - `{ type: "head" }` — agent writes directly to the host working directory. No worktree is created. Bind-mount providers only.
+  - `{ type: "merge-to-head" }` — Sandcastle creates a temporary branch, the agent commits there, and changes merge back to HEAD when done.
+  - `{ type: "branch", branch: "agent/fix-42" }` — commits land on an explicitly named branch.
+
+  See [BranchStrategy](/api/sandbox-types#branchstrategy).
+</ParamField>
+
+<ParamField path="copyToWorktree" type="string[]">
+  Host-relative file paths to copy into the worktree before the sandbox starts — for example `[".env"]`. Not supported with `branchStrategy: { type: "head" }` because in head mode the host working directory is mounted directly.
+</ParamField>
+
+## Lifecycle and setup
+
+<ParamField path="hooks" type="SandboxHooks">
+  Lifecycle hooks grouped by where they run. See [SandboxHooks](/api/sandbox-types#sandboxhooks).
+
+  ```typescript
+  hooks: {
+    host: {
+      onWorktreeReady: [{ command: "cp .env.example .env" }],
+      onSandboxReady: [{ command: "echo sandbox is up" }],
+    },
+    sandbox: {
+      onSandboxReady: [{ command: "npm install", timeoutMs: 300_000 }],
+    },
+  }
+  ```
+</ParamField>
+
+<ParamField path="timeouts" type="Timeouts">
+  Override default timeouts for built-in lifecycle steps. Currently supports `copyToWorktreeMs` (default: `60_000`). See [Timeouts](/api/sandbox-types#timeouts).
+</ParamField>
+
+## Logging and display
+
+<ParamField path="name" type="string">
+  Display name for the run, shown as a prefix in log output. Also used to disambiguate log file names in multi-agent workflows.
+</ParamField>
+
+<ParamField path="logging" type="object" default="{ type: 'file' } (auto-generated path)">
+  How to record progress and agent output. Two modes:
+
+  - `{ type: "file", path: ".sandcastle/logs/my-run.log", onAgentStreamEvent?: (event) => void }` — write to a log file. The optional `onAgentStreamEvent` callback fires for each text chunk and tool call the agent produces, for forwarding to external observability systems. Errors thrown by the callback are swallowed.
+  - `{ type: "stdout" }` — render an interactive UI in the terminal using Clack.
+
+  Defaults to `{ type: "file" }` with an auto-generated path under `.sandcastle/logs/`.
+</ParamField>
+
+## Structured output
+
+<ParamField path="output" type="OutputDefinition">
+  Structured output definition. When provided, Sandcastle scans the agent's stdout for the configured XML tag after the iteration completes, parses and validates the content, and returns it as `result.output`.
+
+  - `Output.object({ tag: "result", schema: z.object({...}) })` — JSON content validated against a Standard Schema (Zod, Valibot, etc.). The inferred type flows through to `result.output`.
+  - `Output.string({ tag: "summary" })` — tag contents returned as a plain trimmed string.
+
+  Constraints: `maxIterations` must be `1` (the default), and the resolved prompt must contain the opening tag literal. See [Output](/api/output).
+</ParamField>

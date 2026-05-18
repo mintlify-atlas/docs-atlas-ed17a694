@@ -1,0 +1,121 @@
+---
+title: "createWorktree() — manage worktree lifecycle independently"
+description: "Create a git worktree as a first-class object with run(), interactive(), and createSandbox(). Container and worktree lifecycles are managed independently."
+---
+
+`createWorktree()` creates a git worktree as an independent, first-class concept that exists separately from any sandbox container. You get a `Worktree` handle with its own `run()`, `interactive()`, and `createSandbox()` methods. This is useful when you want to run a supervised interactive session first to explore the codebase, then hand the same worktree to an unattended AFK agent — all without recreating the worktree between steps.
+
+The key difference from `createSandbox()` is **split ownership**: when you call `wt.createSandbox()`, the resulting `sandbox.close()` tears down the container only. The worktree stays alive until you call `wt.close()`.
+
+Only `branch` and `merge-to-head` branch strategies are accepted. The `head` strategy is a compile-time type error because it means there is no worktree to create.
+
+## Import
+
+```typescript
+import { createWorktree, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+```
+
+## Signature
+
+```typescript
+function createWorktree(options: CreateWorktreeOptions): Promise<Worktree>
+```
+
+## Full example — interactive session then AFK agent
+
+```typescript
+import { createWorktree, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await using wt = await createWorktree({
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  copyToWorktree: ["node_modules"],
+  cwd: "/path/to/other-repo",
+});
+
+console.log(wt.worktreePath); // absolute host path to the worktree
+console.log(wt.branch);       // "agent/fix-42"
+
+// 1. Interactive session — defaults to noSandbox(), no container needed
+await wt.interactive({
+  agent: claudeCode("claude-opus-4-7"),
+  prompt: "Explore the codebase and understand the bug.",
+});
+
+// 2. AFK agent run — sandbox is required for unattended runs
+const result = await wt.run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker({ imageName: "sandcastle:myrepo" }),
+  prompt: "Fix issue #42.",
+  maxIterations: 3,
+});
+
+console.log(result.commits); // commits created during the run
+```
+
+## Creating a long-lived sandbox from a worktree
+
+```typescript
+await using sandbox = await wt.createSandbox({
+  sandbox: docker(),
+  hooks: { sandbox: { onSandboxReady: [{ command: "npm install" }] } },
+});
+
+// sandbox.close() tears down the container only — the worktree stays
+await sandbox.close();
+
+// wt.close() (or await using) handles worktree cleanup
+```
+
+## Automatic cleanup with `await using`
+
+`await using` calls `wt.close()` automatically when the block exits. If the worktree has uncommitted changes it is preserved on disk; if clean it is removed.
+
+## `CreateWorktreeOptions`
+
+<ParamField path="branchStrategy" type="WorktreeBranchStrategy" required>
+  Controls which branch the worktree is on. Accepts `{ type: "branch", branch: "name" }` for an explicit named branch, or `{ type: "merge-to-head" }` for a temporary branch that merges back to HEAD when closed. The `head` strategy is not accepted.
+</ParamField>
+
+<ParamField path="copyToWorktree" type="string[]">
+  Host-relative file paths to copy into the worktree at creation time — for example `["node_modules", ".env"]`.
+</ParamField>
+
+<ParamField path="timeouts" type="Timeouts">
+  Override default timeouts for built-in lifecycle steps. See [Timeouts](/api/sandbox-types#timeouts).
+</ParamField>
+
+<ParamField path="cwd" type="string" default="process.cwd()">
+  Host repo directory. Relative paths resolve against `process.cwd()`; absolute paths pass through as-is. A `CwdError` is thrown if the path does not exist or is not a directory.
+</ParamField>
+
+## `Worktree` object
+
+<ResponseField name="branch" type="string">
+  The branch the worktree is on.
+</ResponseField>
+
+<ResponseField name="worktreePath" type="string">
+  Absolute host path to the worktree directory.
+</ResponseField>
+
+<ResponseField name="run(options)" type="(WorktreeRunOptions) => Promise<WorktreeRunResult>">
+  Run an AFK agent in the worktree. A `sandbox` is required. See [WorktreeRunOptions](/api/worktree-types#worktreerunoptions).
+</ResponseField>
+
+<ResponseField name="interactive(options)" type="(WorktreeInteractiveOptions) => Promise<InteractiveResult>">
+  Run an interactive agent session in the worktree. Defaults to `noSandbox()` when no sandbox is specified. See [WorktreeInteractiveOptions](/api/worktree-types#worktreeinteractiveoptions).
+</ResponseField>
+
+<ResponseField name="createSandbox(options)" type="(WorktreeCreateSandboxOptions) => Promise<Sandbox>">
+  Create a long-lived sandbox backed by this worktree. `sandbox.close()` tears down the container only; the worktree remains. See [WorktreeCreateSandboxOptions](/api/worktree-types#worktreecreatesandboxoptions).
+</ResponseField>
+
+<ResponseField name="close()" type="() => Promise<CloseResult>">
+  Clean up the worktree. Preserves it on disk if it has uncommitted changes; removes it if clean.
+</ResponseField>
+
+<ResponseField name="[Symbol.asyncDispose]()" type="() => Promise<void>">
+  Called automatically by `await using`. Delegates to `close()`.
+</ResponseField>

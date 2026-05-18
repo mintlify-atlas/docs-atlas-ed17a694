@@ -1,0 +1,214 @@
+---
+title: "Worktree types — options and results for createWorktree()"
+description: "Types for createWorktree(): WorktreeBranchStrategy, WorktreeRunOptions, WorktreeRunResult, WorktreeInteractiveOptions, and WorktreeCreateSandboxOptions."
+---
+
+This page documents the types specific to the [`createWorktree()`](/api/create-worktree) API. The `Worktree` handle's methods (`run()`, `interactive()`, `createSandbox()`) accept their own option types that are slightly different from the top-level equivalents. All types are exported from `@ai-hero/sandcastle`.
+
+## `WorktreeBranchStrategy`
+
+```typescript
+type WorktreeBranchStrategy = MergeToHeadBranchStrategy | NamedBranchStrategy;
+```
+
+The branch strategies accepted by `createWorktree()`. The `head` strategy is intentionally excluded because `head` mode means there is no worktree to create — it would be a compile-time type error to pass it here. See [BranchStrategy](/api/sandbox-types#branchstrategy) for the full strategy shapes.
+
+---
+
+## `WorktreeRunOptions`
+
+Options for `wt.run()` — run an AFK agent in an existing worktree with a required sandbox.
+
+<ParamField path="agent" type="AgentProvider" required>
+  Agent provider — for example `claudeCode("claude-opus-4-7")`.
+</ParamField>
+
+<ParamField path="sandbox" type="SandboxProvider" required>
+  Sandbox provider. Required for AFK agent runs — unattended agents must always be sandboxed.
+</ParamField>
+
+<ParamField path="prompt" type="string">
+  Inline prompt. Mutually exclusive with `promptFile`.
+</ParamField>
+
+<ParamField path="promptFile" type="string">
+  Path to a prompt file. Mutually exclusive with `prompt`.
+</ParamField>
+
+<ParamField path="promptArgs" type="PromptArgs">
+  Key-value map for `{{KEY}}` placeholder substitution. Only valid with `promptFile`.
+</ParamField>
+
+<ParamField path="maxIterations" type="number" default="1">
+  Maximum iterations to run.
+</ParamField>
+
+<ParamField path="completionSignal" type="string | string[]">
+  Substring(s) the agent emits to stop the loop early.
+</ParamField>
+
+<ParamField path="idleTimeoutSeconds" type="number" default="600">
+  Idle timeout in seconds. Resets on each agent output event.
+</ParamField>
+
+<ParamField path="name" type="string">
+  Optional display name for the run.
+</ParamField>
+
+<ParamField path="logging" type="LoggingOption" default="{ type: 'file' } (auto-generated)">
+  Logging mode: `{ type: "file", path }` or `{ type: "stdout" }`.
+</ParamField>
+
+<ParamField path="hooks" type="SandboxHooks">
+  Lifecycle hooks. See [SandboxHooks](/api/sandbox-types#sandboxhooks).
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>">
+  Additional environment variables injected into the sandbox.
+</ParamField>
+
+<ParamField path="resumeSession" type="string">
+  Resume a prior Claude Code session by ID. Incompatible with `maxIterations > 1`. The session JSONL file must exist on the host.
+</ParamField>
+
+<ParamField path="signal" type="AbortSignal">
+  Cancel the run when aborted. If already aborted at entry, rejects immediately. Aborting mid-iteration kills the in-flight agent subprocess. The worktree is preserved on disk. The `Worktree` handle remains usable for subsequent operations.
+</ParamField>
+
+---
+
+## `WorktreeRunResult`
+
+Return value of `wt.run()`.
+
+<ResponseField name="iterations" type="IterationResult[]">
+  Per-iteration results. Use `.length` for the count.
+</ResponseField>
+
+<ResponseField name="completionSignal" type="string | undefined">
+  The matched completion signal, or `undefined` if the loop ran to `maxIterations` without a match.
+</ResponseField>
+
+<ResponseField name="stdout" type="string">
+  Combined stdout output from all agent iterations.
+</ResponseField>
+
+<ResponseField name="commits" type="{ sha: string }[]">
+  List of commits created during the run.
+</ResponseField>
+
+<ResponseField name="branch" type="string">
+  The branch name the agent worked on.
+</ResponseField>
+
+<ResponseField name="logFilePath" type="string | undefined">
+  Path to the log file. Only present when logging was set to `{ type: "file" }`.
+</ResponseField>
+
+---
+
+## `WorktreeInteractiveOptions`
+
+Options for `wt.interactive()` — run a supervised interactive agent session in an existing worktree.
+
+<ParamField path="agent" type="AgentProvider" required>
+  Agent provider.
+</ParamField>
+
+<ParamField path="sandbox" type="AnySandboxProvider" default="noSandbox()">
+  Sandbox provider. Defaults to `noSandbox()` when omitted.
+</ParamField>
+
+<ParamField path="prompt" type="string">
+  Inline prompt. Optional — omit to open the TUI with no initial message. Mutually exclusive with `promptFile`.
+</ParamField>
+
+<ParamField path="promptFile" type="string">
+  Path to a prompt file. Mutually exclusive with `prompt`.
+</ParamField>
+
+<ParamField path="name" type="string">
+  Optional session name.
+</ParamField>
+
+<ParamField path="hooks" type="SandboxHooks">
+  Lifecycle hooks. See [SandboxHooks](/api/sandbox-types#sandboxhooks).
+</ParamField>
+
+<ParamField path="promptArgs" type="PromptArgs">
+  Key-value map for `{{KEY}}` placeholder substitution. Only valid with `promptFile`.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>">
+  Additional environment variables injected into the sandbox.
+</ParamField>
+
+<ParamField path="signal" type="AbortSignal">
+  Cancel the session when aborted. The worktree is preserved on disk. The `Worktree` handle remains usable. Rejects with `signal.reason`.
+</ParamField>
+
+---
+
+## `WorktreeCreateSandboxOptions`
+
+Options for `wt.createSandbox()` — create a long-lived sandbox backed by the existing worktree.
+
+<ParamField path="sandbox" type="SandboxProvider" required>
+  Sandbox provider — for example `docker()`.
+</ParamField>
+
+<ParamField path="hooks" type="SandboxHooks">
+  Lifecycle hooks. See [SandboxHooks](/api/sandbox-types#sandboxhooks).
+</ParamField>
+
+<ParamField path="copyToWorktree" type="string[]">
+  Host-relative file paths to copy into the worktree at creation time.
+</ParamField>
+
+<ParamField path="timeouts" type="Timeouts">
+  Override default timeouts. See [Timeouts](/api/sandbox-types#timeouts).
+</ParamField>
+
+<Note>
+  When you create a sandbox via `wt.createSandbox()`, calling `sandbox.close()` tears down the container only. The worktree stays alive until you call `wt.close()`. This differs from top-level `createSandbox()`, where `sandbox.close()` owns both the container and the worktree.
+</Note>
+
+---
+
+## `IterationResult`
+
+A single iteration's result, available in the `iterations` array on any run result type.
+
+<ResponseField name="sessionId" type="string | undefined">
+  Claude Code session ID parsed from the agent's init line. `undefined` for non-Claude agents.
+</ResponseField>
+
+<ResponseField name="sessionFilePath" type="string | undefined">
+  Absolute host path to the captured session JSONL file. `undefined` when session capture is disabled or not applicable.
+</ResponseField>
+
+<ResponseField name="usage" type="IterationUsage | undefined">
+  Token usage snapshot from the last assistant message. `undefined` when session capture is off or the provider does not emit usage data.
+</ResponseField>
+
+---
+
+## `IterationUsage`
+
+Token usage for a single iteration, derived from the agent's last assistant message.
+
+<ResponseField name="inputTokens" type="number">
+  Input tokens consumed.
+</ResponseField>
+
+<ResponseField name="cacheCreationInputTokens" type="number">
+  Tokens used to create prompt cache entries.
+</ResponseField>
+
+<ResponseField name="cacheReadInputTokens" type="number">
+  Tokens read from the prompt cache.
+</ResponseField>
+
+<ResponseField name="outputTokens" type="number">
+  Output tokens generated.
+</ResponseField>

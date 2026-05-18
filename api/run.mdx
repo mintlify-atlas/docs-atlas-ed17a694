@@ -1,0 +1,96 @@
+---
+title: "run() — one-shot agent invocation for Sandcastle"
+description: "One-shot agent invocation that manages the full sandbox lifecycle. Sandcastle handles worktree creation, container startup, and git operations for you."
+---
+
+`run()` is the primary entry point for executing an AI coding agent in a sandboxed environment. You call it once, pass a prompt and a provider, and Sandcastle takes care of creating the worktree, starting the container, running the agent for up to `maxIterations` rounds, collecting commits, and tearing everything down. Use `createSandbox()` instead when you need to run multiple agents inside the same container without paying the startup cost each time.
+
+## Import
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+```
+
+## Signature
+
+```typescript
+function run(options: RunOptions): Promise<RunResult>
+```
+
+When you pass an `output` option, the return type is narrowed:
+
+```typescript
+// With Output.object — result.output is typed to your schema
+function run<T>(options: RunOptions & { output: OutputObjectDefinition<T> }): Promise<RunResult & { output: T }>
+
+// With Output.string — result.output is typed as string
+function run(options: RunOptions & { output: OutputStringDefinition }): Promise<RunResult & { output: string }>
+```
+
+## Usage example
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+const result = await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  maxIterations: 5,
+  hooks: {
+    host: { onWorktreeReady: [{ command: "cp .env.example .env" }] },
+    sandbox: { onSandboxReady: [{ command: "npm install" }] },
+  },
+});
+
+console.log(result.branch);              // "agent/fix-42"
+console.log(result.commits);             // [{ sha: "abc123" }, ...]
+console.log(result.iterations.length);  // number of iterations completed
+console.log(result.completionSignal);   // matched signal string, or undefined
+```
+
+## Options
+
+See [RunOptions](/api/run-options) for the complete field reference.
+
+## Return value
+
+`run()` returns a `Promise<RunResult>`.
+
+<ResponseField name="iterations" type="IterationResult[]">
+  Per-iteration results. Use `.length` to get the count of iterations executed.
+</ResponseField>
+
+<ResponseField name="completionSignal" type="string | undefined">
+  The completion signal string that caused the iteration loop to stop early, or `undefined` if the loop ran to `maxIterations` without a match.
+</ResponseField>
+
+<ResponseField name="stdout" type="string">
+  Combined stdout output from all agent iterations concatenated together.
+</ResponseField>
+
+<ResponseField name="commits" type="{ sha: string }[]">
+  List of commits the agent created during the run, each identified by its SHA.
+</ResponseField>
+
+<ResponseField name="branch" type="string">
+  The branch name the agent worked on inside the sandbox.
+</ResponseField>
+
+<ResponseField name="logFilePath" type="string | undefined">
+  Absolute path to the log file. Only present when `logging` is set to `{ type: "file", ... }`.
+</ResponseField>
+
+<ResponseField name="output" type="T | string | undefined">
+  Typed structured output. Only present when you pass an `output` option (`Output.object(...)` or `Output.string(...)`). The type is inferred from your schema.
+</ResponseField>
+
+## Notes
+
+- `prompt` and `promptFile` are mutually exclusive. Providing neither, or both, is an error.
+- `promptFile` always resolves against `process.cwd()`, not against `cwd`.
+- If you need to run multiple agents inside the same container, use [`createSandbox()`](/api/create-sandbox) instead.
+- When you pass a `signal` that is already aborted, `run()` rejects immediately without doing any setup work.

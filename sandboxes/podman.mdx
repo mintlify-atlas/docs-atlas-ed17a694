@@ -1,0 +1,208 @@
+---
+title: "Podman sandbox provider for Sandcastle agents"
+description: "Run Sandcastle agents in rootless Podman containers. Supports keep-id user namespace mapping, Containerfile builds, SELinux labels, mounts, and networks."
+---
+
+The Podman provider runs Sandcastle agents in [Podman](https://podman.io/) containers. Podman is a rootless alternative to Docker — it runs containers without a daemon and maps your host user into the container without requiring root, making it a good fit for environments where Docker is unavailable or where you prefer daemonless container runtimes.
+
+Like Docker, Podman is a bind-mount provider: your git worktree is bind-mounted directly into the container, so the agent writes to your host filesystem through the mount.
+
+## Installation
+
+Podman must be available on your `PATH`. On macOS and Windows, Podman requires a Podman Machine (a lightweight Linux VM). On Linux, install the `podman` package for your distribution.
+
+For macOS/Windows, initialize and start the Podman Machine before running agents:
+
+```bash
+podman machine init
+podman machine start
+```
+
+Sandcastle automatically checks that a Podman Machine is running on macOS and Windows before creating a container.
+
+## Import
+
+```typescript
+import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
+```
+
+## Basic usage
+
+Pass `podman()` as the `sandbox` option to `run()`:
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: podman(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+## Building the image
+
+Podman uses a `Containerfile` instead of a `Dockerfile`. When you run `sandcastle init` and select Podman as your provider, the scaffolded file is named `Containerfile`. To rebuild after editing it:
+
+```bash
+npx sandcastle podman build-image
+```
+
+<Steps>
+  <Step title="Customize the Containerfile">
+    Edit `.sandcastle/Containerfile` to install the tools your agent needs.
+  </Step>
+  <Step title="Rebuild the image">
+    ```bash
+    npx sandcastle podman build-image
+    ```
+  </Step>
+  <Step title="Run your agent">
+    ```typescript
+    await run({
+      agent: claudeCode("claude-opus-4-7"),
+      sandbox: podman(),
+      promptFile: ".sandcastle/prompt.md",
+    });
+    ```
+  </Step>
+</Steps>
+
+## CLI commands
+
+### `sandcastle podman build-image`
+
+Builds the Podman image from `.sandcastle/Containerfile`.
+
+| Option | Default | Description |
+|---|---|---|
+| `--image-name` | `sandcastle:<repo-dir-name>` | Podman image name |
+| `--containerfile` | — | Path to a custom `Containerfile` (build context is the current working directory) |
+
+<Note>
+  Podman uses `--containerfile` where Docker uses `--dockerfile`. Both flags accept a path to a custom build file.
+</Note>
+
+### `sandcastle podman remove-image`
+
+Removes the Podman image.
+
+| Option | Default | Description |
+|---|---|---|
+| `--image-name` | `sandcastle:<repo-dir-name>` | Podman image name |
+
+## Options
+
+All options are passed to `podman()`:
+
+```typescript
+sandbox: podman({
+  imageName: "sandcastle:myrepo",
+  containerUid: 1000,
+  containerGid: 1000,
+  userns: "keep-id",
+  mounts: [
+    { hostPath: "~/.npm", sandboxPath: "/home/agent/.npm", readonly: true },
+  ],
+  selinuxLabel: "z",
+  env: { MY_TOKEN: "value" },
+  network: "my-network",
+})
+```
+
+<ParamField path="imageName" type="string">
+  Podman image name to use for the container. Defaults to `sandcastle:<repo-dir-name>`, derived from the basename of your repo directory.
+</ParamField>
+
+<ParamField path="containerUid" type="number">
+  UID of the `agent` user inside the container image. Defaults to `1000`. Must match the UID set in the `Containerfile`. Used with `--userns=keep-id` to map your host user to this UID inside the container.
+</ParamField>
+
+<ParamField path="containerGid" type="number">
+  GID of the `agent` user inside the container image. Defaults to `1000`. Must match the GID set in the `Containerfile`.
+</ParamField>
+
+<ParamField path="userns" type='"keep-id" | false'>
+  User namespace mode for rootless Podman. Defaults to `"keep-id"`, which maps your host UID to `containerUid` inside the container via `--userns=keep-id:uid=N,gid=N`. This ensures bind-mounted files and image-built files have correct ownership without needing `chown`. Pass `false` to disable user namespace mapping for rootful Podman setups.
+</ParamField>
+
+<ParamField path="mounts" type="Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }>">
+  Additional host directories to bind-mount into the container. Useful for mounting package manager caches (e.g., `~/.npm`) or shared data directories.
+
+  - `hostPath` supports absolute paths, tilde-expanded paths (`~/...`), and relative paths resolved from `cwd`.
+  - `sandboxPath` supports absolute paths and relative paths resolved from the sandbox repo directory.
+  - If `hostPath` does not exist on the host, sandbox creation fails with a clear error.
+</ParamField>
+
+<ParamField path="selinuxLabel" type='"z" | "Z" | false'>
+  SELinux volume label applied to bind mounts. Defaults to `"z"` (shared label). Use `"Z"` for a private label that restricts access to this container only. Pass `false` to disable labeling. This is a no-op on systems without SELinux.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>">
+  Environment variables to inject into the container at launch time. Merged with env from the agent provider and the run-level `env` option.
+</ParamField>
+
+<ParamField path="network" type="string | string[]">
+  Podman network(s) to attach the container to. Pass a single string for one network or an array for multiple. When omitted, Podman's default network is used.
+
+  - `"my-network"` → `--network my-network`
+  - `["net1", "net2"]` → `--network net1 --network net2`
+</ParamField>
+
+## User namespace mapping
+
+The key difference between the Podman and Docker providers is how they handle user identity. Docker matches the host UID at build time via `--build-arg AGENT_UID`. Podman uses `--userns=keep-id` at runtime to remap your host UID into the container without requiring a rebuild.
+
+With `userns: "keep-id"` (the default), Podman maps your host user identity to `containerUid:containerGid` inside the container. This means:
+
+- Files you create on the host appear owned by your user.
+- Files the agent creates inside the container appear owned by your user on the host.
+- No `chown` step is needed.
+
+<Tip>
+  If you are running Podman in rootful mode (e.g., as `root` on a server), pass `userns: false` to disable user namespace remapping.
+</Tip>
+
+## Branch strategy
+
+Podman is a bind-mount provider and defaults to the `head` branch strategy, identical to the Docker provider. You can override it on `run()`:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: podman(),
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+## Complete example
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { podman } from "@ai-hero/sandcastle/sandboxes/podman";
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: podman({
+    imageName: "sandcastle:myrepo",
+    containerUid: 1000,
+    containerGid: 1000,
+    userns: "keep-id",
+    mounts: [
+      { hostPath: "~/.npm", sandboxPath: "/home/agent/.npm", readonly: true },
+    ],
+    selinuxLabel: "z",
+    env: { MY_API_KEY: process.env.MY_API_KEY! },
+    network: "my-network",
+  }),
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  promptFile: ".sandcastle/prompt.md",
+  hooks: {
+    sandbox: {
+      onSandboxReady: [{ command: "npm install" }],
+    },
+  },
+});
+```

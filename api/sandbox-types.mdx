@@ -1,0 +1,252 @@
+---
+title: "Sandbox types — providers, strategies, hooks, and mounts"
+description: "Type reference for SandboxProvider, AnySandboxProvider, BranchStrategy, SandboxHooks, MountConfig, and Timeouts used across the Sandcastle API."
+---
+
+This page documents the shared types that appear across `run()`, `createSandbox()`, `createWorktree()`, and `interactive()`. All types are exported from `@ai-hero/sandcastle`.
+
+## Sandbox provider types
+
+Sandcastle dispatches on a `tag` discriminant to determine how to start and manage a sandbox at runtime.
+
+### `SandboxProvider`
+
+```typescript
+type SandboxProvider = BindMountSandboxProvider | IsolatedSandboxProvider;
+```
+
+The union accepted by `run()` and `createSandbox()`. Does not include `NoSandboxProvider` — that is only valid for `interactive()`.
+
+### `AnySandboxProvider`
+
+```typescript
+type AnySandboxProvider =
+  | BindMountSandboxProvider
+  | IsolatedSandboxProvider
+  | NoSandboxProvider;
+```
+
+The union accepted by `interactive()` and `wt.interactive()`. Adds `NoSandboxProvider` to the base union.
+
+### `BindMountSandboxProvider`
+
+Providers that mount the host worktree directly into the container — no file transfer needed. Built-in examples: `docker()`, `podman()`.
+
+<ResponseField name="tag" type='"bind-mount"'>
+  Discriminant used for internal dispatch.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable provider name.
+</ResponseField>
+
+<ResponseField name="env" type="Record<string, string>">
+  Environment variables injected by this provider at launch time.
+</ResponseField>
+
+<ResponseField name="sandboxHomedir" type="string | undefined">
+  Absolute path to the home directory inside the sandbox (for example `/home/agent`). Used to expand `~` in `sandboxPath` mount configs.
+</ResponseField>
+
+### `IsolatedSandboxProvider`
+
+Providers with their own filesystem where the repo must be copied in and out. Built-in example: `vercel()`.
+
+<ResponseField name="tag" type='"isolated"'>
+  Discriminant used for internal dispatch.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable provider name.
+</ResponseField>
+
+<ResponseField name="env" type="Record<string, string>">
+  Environment variables injected by this provider at launch time.
+</ResponseField>
+
+### `NoSandboxProvider`
+
+Runs the agent directly on the host with no container. Only valid for `interactive()` and `wt.interactive()`.
+
+<ResponseField name="tag" type='"none"'>
+  Discriminant used for internal dispatch.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable provider name.
+</ResponseField>
+
+<ResponseField name="env" type="Record<string, string>">
+  Environment variables injected by this provider.
+</ResponseField>
+
+### Custom providers
+
+Create a bind-mount provider with `createBindMountSandboxProvider(config)` or an isolated provider with `createIsolatedSandboxProvider(config)`, both exported from `@ai-hero/sandcastle`.
+
+---
+
+## `BranchStrategy`
+
+Controls where the agent's commits land. Three variants are available.
+
+```typescript
+type BranchStrategy =
+  | HeadBranchStrategy
+  | MergeToHeadBranchStrategy
+  | NamedBranchStrategy;
+```
+
+### `HeadBranchStrategy`
+
+```typescript
+interface HeadBranchStrategy {
+  readonly type: "head";
+}
+```
+
+The agent writes directly to the host working directory. No worktree is created. Only valid for bind-mount and no-sandbox providers. This is the default for bind-mount providers.
+
+### `MergeToHeadBranchStrategy`
+
+```typescript
+interface MergeToHeadBranchStrategy {
+  readonly type: "merge-to-head";
+}
+```
+
+Sandcastle creates a temporary branch in a git worktree. The agent commits there; when the run finishes the changes are merged back to HEAD and the temp branch is deleted. This is the default for isolated providers.
+
+### `NamedBranchStrategy`
+
+```typescript
+interface NamedBranchStrategy {
+  readonly type: "branch";
+  readonly branch: string;
+  readonly baseBranch?: string;
+}
+```
+
+Commits land on the explicitly named branch. The branch is created from `baseBranch` (defaults to HEAD) if it does not already exist.
+
+<ResponseField name="type" type='"branch"'>
+  Strategy discriminant.
+</ResponseField>
+
+<ResponseField name="branch" type="string">
+  The explicit branch name to create or check out.
+</ResponseField>
+
+<ResponseField name="baseBranch" type="string | undefined">
+  Git ref to branch from when the branch does not yet exist. Defaults to `HEAD`.
+</ResponseField>
+
+---
+
+## `SandboxHooks`
+
+Lifecycle hooks grouped by where they run.
+
+```typescript
+type SandboxHooks = {
+  readonly host?: {
+    readonly onWorktreeReady?: ReadonlyArray<{
+      readonly command: string;
+      readonly timeoutMs?: number;
+    }>;
+    readonly onSandboxReady?: ReadonlyArray<{
+      readonly command: string;
+      readonly timeoutMs?: number;
+    }>;
+  };
+  readonly sandbox?: {
+    readonly onSandboxReady?: ReadonlyArray<{
+      readonly command: string;
+      readonly sudo?: boolean;
+      readonly timeoutMs?: number;
+    }>;
+  };
+};
+```
+
+### `host.onWorktreeReady`
+
+Runs on the host after `copyToWorktree` completes, before the sandbox container starts. Working directory is the worktree path (or the host repo root under `head` strategy). Hooks run sequentially in declared order.
+
+Each entry accepts:
+
+<ResponseField name="command" type="string">
+  Shell command to run on the host.
+</ResponseField>
+
+<ResponseField name="timeoutMs" type="number" default="60000">
+  Per-hook timeout in milliseconds. Overrides the default 60 s.
+</ResponseField>
+
+### `host.onSandboxReady`
+
+Runs on the host after the sandbox container is up, in parallel with `sandbox.onSandboxReady`. Working directory is the worktree path.
+
+Same entry shape as `host.onWorktreeReady`.
+
+### `sandbox.onSandboxReady`
+
+Runs inside the sandbox container after it starts, in parallel with `host.onSandboxReady`. Working directory is the sandbox repo directory.
+
+Each entry accepts:
+
+<ResponseField name="command" type="string">
+  Shell command to run inside the sandbox.
+</ResponseField>
+
+<ResponseField name="sudo" type="boolean">
+  Run the command with elevated privileges.
+</ResponseField>
+
+<ResponseField name="timeoutMs" type="number" default="60000">
+  Per-hook timeout in milliseconds.
+</ResponseField>
+
+**Ordering:** `copyToWorktree` → `host.onWorktreeReady` (sequential) → sandbox created → `host.onSandboxReady` + `sandbox.onSandboxReady` (parallel).
+
+---
+
+## `MountConfig`
+
+A single bind-mount descriptor for `docker()` and `podman()` providers. Pass an array of these as `mounts` in the provider factory.
+
+```typescript
+interface MountConfig {
+  readonly hostPath: string;
+  readonly sandboxPath: string;
+  readonly readonly?: boolean;
+}
+```
+
+<ResponseField name="hostPath" type="string">
+  Path on the host. Supports absolute paths (`/data/cache`), tilde-expanded paths (`~/data`), and relative paths (`data`) resolved from `process.cwd()`.
+</ResponseField>
+
+<ResponseField name="sandboxPath" type="string">
+  Path inside the sandbox container. Supports absolute paths, tilde-expanded paths (resolved using the provider's sandbox home directory), and relative paths resolved from the sandbox repo directory.
+</ResponseField>
+
+<ResponseField name="readonly" type="boolean" default="false">
+  Mount the directory as read-only.
+</ResponseField>
+
+---
+
+## `Timeouts`
+
+Override default timeouts for built-in lifecycle steps. Unset keys keep their defaults.
+
+```typescript
+interface Timeouts {
+  readonly copyToWorktreeMs?: number;
+}
+```
+
+<ResponseField name="copyToWorktreeMs" type="number" default="60000">
+  Timeout in milliseconds for the host-side copy of `copyToWorktree` paths into the worktree.
+</ResponseField>

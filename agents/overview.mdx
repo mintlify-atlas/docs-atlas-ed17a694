@@ -1,0 +1,67 @@
+---
+title: "Agent providers overview for Sandcastle runs"
+description: "Agent providers tell Sandcastle which AI coding tool to invoke and how to interact with it. Choose from four built-in providers or implement your own."
+---
+
+An agent provider is a pluggable implementation that builds commands and parses output for a specific AI coding tool. You inject one into `run()` via the `agent` option, and Sandcastle handles the rest — launching the agent inside the sandbox, streaming its output, and capturing results.
+
+## Built-in providers
+
+Sandcastle ships with four built-in agent providers. All four are exported from the main package:
+
+```typescript
+import { claudeCode, codex, opencode, pi } from "@ai-hero/sandcastle";
+```
+
+| Provider | Import name | Example model |
+|---|---|---|
+| Claude Code | `claudeCode` | `"claude-opus-4-7"` |
+| Codex | `codex` | `"gpt-5.4-mini"` |
+| OpenCode | `opencode` | `"opencode/big-pickle"` |
+| Pi | `pi` | — |
+
+## Passing an agent to `run()`
+
+Every call to `run()` requires an `agent` option. Call the provider factory with a model string — and optionally a second argument for provider-specific options — and pass the result:
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+To pass provider-specific options, use the optional second argument:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7", { effort: "high" }),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+## Custom agent providers
+
+If you need to integrate a tool that isn't covered by the built-in providers, you can implement the `AgentProvider` interface directly. A custom provider declares its `env` variables, implements `buildPrintCommand` to produce the shell command Sandcastle runs inside the sandbox, and implements `parseStreamLine` to translate each line of stdout into structured events.
+
+<CardGroup cols={2}>
+  <Card
+    title="Claude Code"
+    icon="robot"
+    href="/agents/claude-code"
+  >
+    Effort levels, session capture, and session resume for Claude Code.
+  </Card>
+  <Card
+    title="Other agents"
+    icon="grid-2"
+    href="/agents/other-agents"
+  >
+    Codex, OpenCode, and Pi provider references.
+  </Card>
+</CardGroup>

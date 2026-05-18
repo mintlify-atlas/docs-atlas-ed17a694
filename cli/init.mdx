@@ -1,0 +1,91 @@
+---
+title: "sandcastle init: scaffold the config directory"
+description: "Run sandcastle init to scaffold .sandcastle/ with a Dockerfile, prompt.md, and environment file. Choose your sandbox provider, agent, backlog manager, and template."
+---
+
+`sandcastle init` is the first command you run in a new repo. It scaffolds the `.sandcastle/` config directory with everything Sandcastle needs: a container image definition, a prompt template, and environment variable placeholders. You choose a sandbox provider (Docker or Podman), an agent, a backlog manager, and a workflow template during the interactive prompts — or pass flags to skip them.
+
+## Usage
+
+```bash
+npx sandcastle init
+```
+
+Sandcastle walks you through a series of prompts and creates the config directory. Once it finishes, copy the generated `.env.example` and fill in your API key:
+
+```bash
+cp .sandcastle/.env.example .sandcastle/.env
+```
+
+## Options
+
+<ParamField path="--image-name" type="string">
+  Docker or Podman image name to use. Defaults to `sandcastle:<repo-dir-name>`, derived from the basename of your repo directory.
+</ParamField>
+
+<ParamField path="--agent" type="string">
+  Agent to use. Accepted values: `claude-code`, `pi`, `codex`, `opencode`. If omitted, `sandcastle init` prompts you to choose interactively.
+</ParamField>
+
+<ParamField path="--model" type="string">
+  Model to use with the chosen agent (for example, `claude-sonnet-4-6`). Defaults to the agent's default model if omitted.
+</ParamField>
+
+<ParamField path="--template" type="string">
+  Template to scaffold. Accepted values: `blank`, `simple-loop`, `sequential-reviewer`, `parallel-planner`, `parallel-planner-with-review`. If omitted, `sandcastle init` prompts you to choose interactively.
+</ParamField>
+
+## Files created
+
+After a successful init, your repo will contain:
+
+```
+.sandcastle/
+├── Dockerfile        # Sandbox environment (Containerfile when using Podman)
+├── prompt.md         # Agent instructions
+├── .env.example      # Environment variable placeholders
+└── .gitignore        # Ignores .env and logs/
+```
+
+The `Dockerfile` (or `Containerfile` for Podman) is pre-configured for the agent you chose and includes Dockerfile snippets for your selected backlog manager. You can customize it freely — add language runtimes, install additional tools, or change the base image. Run `sandcastle docker build-image` (or `sandcastle podman build-image`) after any change to rebuild the image.
+
+`prompt.md` contains starter instructions suited to the template you selected. Edit it to describe the work you want the agent to perform.
+
+`.env.example` lists the environment variables the chosen agent needs — for example, `ANTHROPIC_API_KEY` for Claude Code. Copy it to `.env` and fill in your values. The generated `.gitignore` ensures `.env` is never committed.
+
+## File name: `main.ts` vs `main.mts`
+
+`sandcastle init` also scaffolds the main orchestration script. If your project's `package.json` contains `"type": "module"`, the file is named `main.ts`. Otherwise it is named `main.mts`. Both are TypeScript files — the extension difference only affects how Node.js's module system resolves them.
+
+## Getting started after init
+
+<Steps>
+  <Step title="Copy and fill in the environment file">
+    ```bash
+    cp .sandcastle/.env.example .sandcastle/.env
+    ```
+    Open `.sandcastle/.env` and set `ANTHROPIC_API_KEY` (or whichever key your agent requires).
+  </Step>
+  <Step title="Build the container image">
+    ```bash
+    npx sandcastle docker build-image
+    ```
+    Or, if you chose Podman during init:
+    ```bash
+    npx sandcastle podman build-image
+    ```
+  </Step>
+  <Step title="Run the scaffolded script">
+    ```bash
+    npx tsx .sandcastle/main.ts
+    ```
+  </Step>
+</Steps>
+
+## Error: `.sandcastle/` already exists
+
+`sandcastle init` errors immediately if a `.sandcastle/` directory already exists in the repo. This prevents accidental overwrites of your Dockerfile customizations or prompt templates. If you want to try a different template, either run `sandcastle init` in a fresh directory or remove `.sandcastle/` first.
+
+<Warning>
+  Removing `.sandcastle/` is irreversible. Back up any customizations — particularly your `Dockerfile` and `prompt.md` — before deleting the directory.
+</Warning>

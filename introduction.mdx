@@ -1,0 +1,83 @@
+---
+title: "Sandcastle: orchestrate AI coding agents in TypeScript"
+description: "Sandcastle is a TypeScript library for running AI coding agents in isolated sandboxes. Provider-agnostic, branch-aware, and built for parallel workflows."
+---
+
+Sandcastle lets you invoke AI coding agents — Claude Code, Codex, OpenCode, Pi — inside isolated sandbox environments with a single `sandcastle.run()` call. It handles the full lifecycle: spinning up a container, running the agent against your codebase, and landing commits on the right branch. All 100% local, all provider-agnostic.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Sandcastle and run your first agent in under five minutes
+  </Card>
+  <Card title="Core concepts" icon="book" href="/concepts">
+    Understand sandboxes, agents, branch strategies, and iterations
+  </Card>
+  <Card title="API reference" icon="code" href="/api/run">
+    Full reference for `run()`, `createSandbox()`, `createWorktree()`, and more
+  </Card>
+  <Card title="Sandbox providers" icon="box" href="/sandboxes/docker">
+    Docker, Podman, Vercel, and custom sandbox provider setup
+  </Card>
+</CardGroup>
+
+## Why Sandcastle?
+
+Sandcastle solves the problem of safely running unsupervised AI coding agents. Instead of letting an agent write directly to your working directory, Sandcastle spins up an isolated environment, runs the agent there, and surfaces the results as commits on a branch you control.
+
+<CardGroup cols={2}>
+  <Card title="Provider-agnostic" icon="plug">
+    Works with Docker, Podman, Vercel Firecracker VMs, or any custom provider you implement
+  </Card>
+  <Card title="Flexible branching" icon="code-branch">
+    Three branch strategies: write to head, merge to head, or land on a named branch
+  </Card>
+  <Card title="Dynamic prompts" icon="file-lines">
+    Prompt templates with `{{KEY}}` substitution and `` !`command` `` shell expansion inside the sandbox
+  </Card>
+  <Card title="Parallel workflows" icon="arrows-split-up-and-left">
+    Spawn multiple agents on separate branches simultaneously for parallel issue resolution
+  </Card>
+  <Card title="Structured output" icon="brackets-curly">
+    Extract schema-validated JSON payloads from agent output with `Output.object()`
+  </Card>
+  <Card title="Lifecycle hooks" icon="bolt">
+    Run setup commands on the host or inside the sandbox before the agent starts
+  </Card>
+</CardGroup>
+
+## How it works
+
+<Steps>
+  <Step title="Install and initialize">
+    Install `@ai-hero/sandcastle` and run `sandcastle init` to scaffold a `.sandcastle/` config directory with a Dockerfile, prompt file, and environment template.
+  </Step>
+  <Step title="Configure your sandbox">
+    Choose a sandbox provider (Docker, Podman, or Vercel) and a branch strategy. The provider controls the isolation boundary; the branch strategy controls where commits land.
+  </Step>
+  <Step title="Write your prompt">
+    Edit `.sandcastle/prompt.md` with instructions for the agent. Use `{{KEY}}` placeholders for dynamic values and `` !`command` `` expressions to pull in live context like open GitHub issues or recent commits.
+  </Step>
+  <Step title="Run">
+    Call `sandcastle.run()` from TypeScript or execute your `.sandcastle/main.ts` script. Sandcastle manages the container lifecycle, runs the agent, and returns commits and iteration results.
+  </Step>
+</Steps>
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install --save-dev @ai-hero/sandcastle
+```
+```bash pnpm
+pnpm add -D @ai-hero/sandcastle
+```
+```bash yarn
+yarn add --dev @ai-hero/sandcastle
+```
+</CodeGroup>
+
+Then initialize your project:
+
+```bash
+npx sandcastle init
+```

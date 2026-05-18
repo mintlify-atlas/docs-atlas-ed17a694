@@ -1,0 +1,142 @@
+---
+title: "Hooks: running commands at lifecycle events"
+description: "Use Sandcastle lifecycle hooks to install dependencies, copy secrets, and run setup commands on the host or inside the sandbox before agent work begins."
+---
+
+Hooks let you run commands at specific points in the sandbox lifecycle — before the agent starts, after the worktree is ready, or inside the sandbox after it is created. This is where you install dependencies, copy secrets into the worktree, or perform any other setup that the agent needs before it begins working.
+
+## The hooks option
+
+Pass `hooks` to `run()` with `host` and `sandbox` sub-objects. Each sub-object groups hooks by when they fire:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  hooks: {
+    host: {
+      onWorktreeReady: [{ command: "cp .env.example .env" }],
+      onSandboxReady: [{ command: "echo setup done" }],
+    },
+    sandbox: {
+      onSandboxReady: [{ command: "npm install" }],
+    },
+  },
+});
+```
+
+## Available hooks
+
+### host.onWorktreeReady
+
+Runs on the host after the worktree is created but before the sandbox container starts. Use this hook to copy files into the worktree that the agent will need — for example, a `.env` file that should not be committed to the repo.
+
+```typescript
+hooks: {
+  host: {
+    onWorktreeReady: [{ command: "cp .env.example .sandcastle/worktrees/agent-fix-42/.env" }],
+  },
+},
+```
+
+Host hooks are `{ command: string }` objects. There is no `sudo` option for host hooks — commands run on the host as your user. Host hooks in `onWorktreeReady` run sequentially, in the order you list them.
+
+### host.onSandboxReady
+
+Runs on the host after the sandbox container is created. This fires in parallel with `sandbox.onSandboxReady`. Use this for host-side operations that are only meaningful once the sandbox exists — such as registering the sandbox in an external system.
+
+```typescript
+hooks: {
+  host: {
+    onSandboxReady: [{ command: "echo 'sandbox is up'" }],
+  },
+},
+```
+
+### sandbox.onSandboxReady
+
+Runs inside the sandbox after the container is created, in parallel with `host.onSandboxReady`. This is the right place to install dependencies that the agent needs, such as running `npm install`.
+
+```typescript
+hooks: {
+  sandbox: {
+    onSandboxReady: [{ command: "npm install" }],
+  },
+},
+```
+
+Sandbox hooks are `{ command: string; sudo?: boolean }` objects. Pass `sudo: true` to run the command as root inside the sandbox.
+
+## Lifecycle order
+
+Hooks fire in this order:
+
+<Steps>
+  <Step title="copyToWorktree">
+    Files listed in the `copyToWorktree` option are copied into the worktree on the host. This happens before the container starts.
+  </Step>
+  <Step title="host.onWorktreeReady (sequential)">
+    Host worktree hooks run one by one on the host, in the order you list them.
+  </Step>
+  <Step title="Sandbox created">
+    Sandcastle starts the sandbox container.
+  </Step>
+  <Step title="host.onSandboxReady + sandbox.onSandboxReady (parallel)">
+    Both sets of sandbox-ready hooks run at the same time — host-side hooks run on the host, sandbox-side hooks run inside the container.
+  </Step>
+</Steps>
+
+## Copying files into the worktree
+
+Use `copyToWorktree` to copy host-relative file paths into the sandbox before the container starts. This is the cleanest way to inject secrets or generated files:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  copyToWorktree: [".env"],
+});
+```
+
+<Warning>
+  `copyToWorktree` is not supported when `branchStrategy` is `{ type: "head" }`. With the `head` strategy, the agent works directly in the host directory, so no worktree copy step exists.
+</Warning>
+
+## Example: install dependencies and inject a secret
+
+This example copies a `.env` file into the worktree on the host, then runs `npm install` inside the sandbox:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: docker(),
+  promptFile: ".sandcastle/prompt.md",
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  copyToWorktree: [".env"],
+  hooks: {
+    sandbox: {
+      onSandboxReady: [{ command: "npm install" }],
+    },
+  },
+});
+```
+
+The `.env` file lands in the worktree before the container starts, so `npm install` runs with the correct environment variables already in place.
+
+## Hook timeouts
+
+Each hook runs with a default timeout of 60 seconds. You can override the timeout per hook:
+
+```typescript
+hooks: {
+  sandbox: {
+    onSandboxReady: [
+      { command: "npm install", timeoutMs: 120_000 },
+    ],
+  },
+},
+```
+
+If a hook times out or exits with a non-zero code, the run fails immediately.

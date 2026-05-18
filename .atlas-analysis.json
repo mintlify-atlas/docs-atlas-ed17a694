@@ -1,0 +1,118 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Sandcastle",
+  "projectDescription": "A TypeScript library and CLI for orchestrating AI coding agents in isolated sandboxes, managing sandbox lifecycle, branch strategies, prompts, and iterations.",
+  "theme": "luma",
+  "primaryColor": "#040404",
+  "lightColor": "#354dc4",
+  "darkColor": "#94a4e4",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Sandbox Providers",
+            "pages": [
+              "sandboxes/docker",
+              "sandboxes/podman",
+              "sandboxes/vercel",
+              "sandboxes/custom"
+            ]
+          },
+          {
+            "group": "Agent Providers",
+            "pages": [
+              "agents/overview",
+              "agents/claude-code",
+              "agents/other-agents"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/prompts",
+              "guides/branch-strategies",
+              "guides/hooks",
+              "guides/templates",
+              "guides/structured-output"
+            ]
+          },
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "cli/init",
+              "cli/docker",
+              "cli/podman"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/run",
+              "api/create-sandbox",
+              "api/create-worktree",
+              "api/interactive"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/run-options",
+              "api/sandbox-types",
+              "api/worktree-types",
+              "api/output"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Provider-agnostic sandbox orchestration (Docker, Podman, Vercel, custom)",
+    "Flexible branch strategies: head, merge-to-head, and named branch",
+    "Dynamic prompt system with argument substitution and shell expression expansion",
+    "Structured output extraction with schema validation (Zod/Valibot)",
+    "Lifecycle hooks for host and sandbox setup steps",
+    "Session capture and resume for Claude Code agents",
+    "Parallel agent orchestration via multiple sandcastle.run() calls",
+    "Init scaffold with ready-to-use templates for common workflows",
+    "AbortSignal support for cancellation"
+  ],
+  "publicApiSurface": [
+    "run(options: RunOptions): Promise<RunResult>",
+    "createSandbox(options: CreateSandboxOptions): Promise<Sandbox>",
+    "createWorktree(options: CreateWorktreeOptions): Promise<Worktree>",
+    "interactive(options: InteractiveOptions): Promise<InteractiveResult>",
+    "claudeCode(model, options?): AgentProvider",
+    "codex(model, options?): AgentProvider",
+    "opencode(model, options?): AgentProvider",
+    "pi(model, options?): AgentProvider",
+    "Output.object({ tag, schema }): OutputDefinition",
+    "Output.string({ tag }): OutputDefinition",
+    "createBindMountSandboxProvider(...): SandboxProvider",
+    "createIsolatedSandboxProvider(...): SandboxProvider",
+    "docker(options?): BindMountSandboxProvider",
+    "podman(options?): BindMountSandboxProvider",
+    "vercel(options?): IsolatedSandboxProvider",
+    "noSandbox(): NoSandboxProvider",
+    "sandcastle init",
+    "sandcastle docker build-image",
+    "sandcastle docker remove-image",
+    "sandcastle podman build-image",
+    "sandcastle podman remove-image"
+  ]
+}

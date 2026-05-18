@@ -1,0 +1,183 @@
+---
+title: "Vercel sandbox provider for Sandcastle agents"
+description: "Run Sandcastle agents in Vercel Firecracker microVM sandboxes. An isolated provider that syncs code in and extracts commits out, with no local container required."
+---
+
+The Vercel provider runs Sandcastle agents inside [Vercel Firecracker microVM sandboxes](https://vercel.com/blog/sandboxes) via the `@vercel/sandbox` SDK. Unlike the Docker and Podman providers, Vercel is an _isolated_ provider: the sandbox has its own filesystem, so Sandcastle syncs your repository into the VM and extracts commits back to your host when the agent finishes.
+
+This makes Vercel a good fit for CI pipelines, cloud-based workflows, or any situation where you cannot or prefer not to run a local container daemon.
+
+## Prerequisites
+
+Install `@vercel/sandbox` as a peer dependency alongside Sandcastle:
+
+<CodeGroup>
+
+```bash npm
+npm install --save-dev @vercel/sandbox
+```
+
+```bash pnpm
+pnpm add -D @vercel/sandbox
+```
+
+```bash yarn
+yarn add --dev @vercel/sandbox
+```
+
+</CodeGroup>
+
+You also need a Vercel account and an access token. Set `VERCEL_TOKEN` in your environment, or pass `token` directly to `vercel()`. In Vercel-hosted environments, `VERCEL_OIDC_TOKEN` is preferred and is read automatically by the SDK.
+
+## Import
+
+```typescript
+import { vercel } from "@ai-hero/sandcastle/sandboxes/vercel";
+```
+
+## Basic usage
+
+Pass `vercel()` as the `sandbox` option to `run()`:
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { vercel } from "@ai-hero/sandcastle/sandboxes/vercel";
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: vercel(),
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+## How isolated providers work
+
+Isolated providers differ from bind-mount providers in two important ways:
+
+- **Code sync in**: Sandcastle copies your repository into the sandbox filesystem before the agent runs. This replaces bind-mounting, which requires direct filesystem access to the host.
+- **Commits out**: After the agent runs, Sandcastle extracts the commits it created and applies them to the appropriate branch on your host.
+
+Because isolated providers manage their own filesystem, the `head` branch strategy is not available — you cannot write directly to the host working directory from inside a VM. The default branch strategy for isolated providers is `merge-to-head`.
+
+<Note>
+  You do not need to build a container image to use the Vercel provider. Each run creates a fresh ephemeral microVM.
+</Note>
+
+## Branch strategy
+
+Vercel is an isolated provider, so it defaults to `merge-to-head`. You can override this to use a named branch:
+
+```typescript
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: vercel(),
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  promptFile: ".sandcastle/prompt.md",
+});
+```
+
+The `head` strategy (`{ type: "head" }`) is not supported for isolated providers and will produce a compile-time type error.
+
+## Options
+
+All options are passed to `vercel()`:
+
+```typescript
+sandbox: vercel({
+  token: process.env.VERCEL_TOKEN,
+  runtime: "node24",
+  resources: { vcpus: 2 },
+  timeout: 300_000,
+  env: { MY_TOKEN: "value" },
+})
+```
+
+<ParamField path="token" type="string">
+  Vercel access token. Falls back to the SDK's default auth behavior, which reads `VERCEL_OIDC_TOKEN` (recommended for Vercel-hosted environments) or `VERCEL_TOKEN` from the environment.
+</ParamField>
+
+<ParamField path="runtime" type="string">
+  The runtime for the sandbox (e.g., `"node24"`, `"node22"`, `"python3.13"`). Defaults to `"node24"`.
+</ParamField>
+
+<ParamField path="template" type="string">
+  Shorthand alias for `runtime` (e.g., `"node-22"`). When both `runtime` and `template` are set, `runtime` takes precedence.
+</ParamField>
+
+<ParamField path="resources" type="{ vcpus: number }">
+  Resources to allocate to the sandbox. Each vCPU gets 2048 MB of memory.
+</ParamField>
+
+<ParamField path="timeout" type="number">
+  Timeout in milliseconds before the sandbox auto-terminates.
+</ParamField>
+
+<ParamField path="timeoutMs" type="number">
+  Alias for `timeout`, kept for discoverability. When both are set, `timeout` takes precedence.
+</ParamField>
+
+<ParamField path="ports" type="number[]">
+  Array of port numbers to expose from the sandbox (up to 4).
+</ParamField>
+
+<ParamField path="source" type="object">
+  The source of the sandbox — a git repo, tarball, or snapshot. Omit to start an empty sandbox (Sandcastle syncs your code in separately).
+
+  ```typescript
+  // Git source
+  source: { type: "git", url: "https://github.com/org/repo", depth: 1 }
+
+  // Tarball source
+  source: { type: "tarball", url: "https://example.com/archive.tar.gz" }
+
+  // Snapshot source
+  source: { type: "snapshot", snapshotId: "snap_abc123" }
+  ```
+</ParamField>
+
+<ParamField path="networkPolicy" type="Record<string, unknown>">
+  Network policy for the sandbox. Defaults to full internet access if not specified.
+</ParamField>
+
+<ParamField path="projectId" type="string">
+  Vercel project ID to associate sandbox operations with.
+</ParamField>
+
+<ParamField path="teamId" type="string">
+  Vercel team ID to associate sandbox operations with.
+</ParamField>
+
+<ParamField path="env" type="Record<string, string>">
+  Environment variables to inject into the sandbox at launch time. Merged with env from the agent provider and the run-level `env` option.
+</ParamField>
+
+## Complete example
+
+```typescript
+import { run, claudeCode } from "@ai-hero/sandcastle";
+import { vercel } from "@ai-hero/sandcastle/sandboxes/vercel";
+
+await run({
+  agent: claudeCode("claude-opus-4-7"),
+  sandbox: vercel({
+    token: process.env.VERCEL_TOKEN,
+    runtime: "node24",
+    resources: { vcpus: 2 },
+    // Auto-terminate the sandbox after 5 minutes
+    timeout: 300_000,
+    env: { MY_API_KEY: process.env.MY_API_KEY! },
+  }),
+  // Isolated providers default to merge-to-head
+  branchStrategy: { type: "branch", branch: "agent/fix-42" },
+  promptFile: ".sandcastle/prompt.md",
+  hooks: {
+    sandbox: {
+      onSandboxReady: [{ command: "npm install" }],
+    },
+  },
+});
+```
+
+<Warning>
+  The `@vercel/sandbox` package is loaded dynamically at runtime. If it is not installed, the Vercel provider will throw when you call `run()`. Install it as a dev dependency before using this provider.
+</Warning>
